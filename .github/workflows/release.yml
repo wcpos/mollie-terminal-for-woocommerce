@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Check if version has changed
+        id: check_version
+        run: |
+          VERSION=$(grep -oP "Version:\s*\K\d+(\.\d+)*" mollie-terminal-for-woocommerce.php)
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          git fetch --prune --unshallow
+          if git tag | grep -q "v$VERSION"; then
+            echo "Version has not changed. Skipping release..."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Version has changed. Creating new release..."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install composer dependencies
+        if: steps.check_version.outputs.release == 'true'
+        run: composer install --no-dev
+
+      - name: Create Release
+        if: steps.check_version.outputs.release == 'true'
+        id: create_release
+        uses: actions/create-release@0cb9c9b65d5d1901c1f53e5e66eaf4afd303e70e # v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ env.VERSION }}
+          release_name: Release v${{ env.VERSION }}
+          draft: false
+          prerelease: false
+
+      - name: Build and upload ZIP
+        if: steps.check_version.outputs.release == 'true'
+        run: |
+          rm -rf packages
+          zip -r mollie-terminal-for-woocommerce.zip . -x "*.git*"
+          gh release upload v${{ env.VERSION }} mollie-terminal-for-woocommerce.zip --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
