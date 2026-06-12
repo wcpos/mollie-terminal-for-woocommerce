@@ -1,0 +1,15 @@
+{
+  "name": "wcpos/mollie-terminal-for-woocommerce",
+  "description": "Mollie Terminal integration for WooCommerce POS.",
+  "type": "wordpress-plugin",
+  "license": "GPL-3.0-or-later",
+  "authors": [{"name":"kilbot","email":"paul@kilbot.com"}],
+  "require": {"php": ">=7.4", "ext-json": "*"},
+  "require-dev": {},
+  "config": {"platform": {"php": "7.4"}, "platform-check": false, "sort-packages": true},
+  "scripts": {
+    "lint": "find . -path ./vendor -prune -o -name '*.php' -print -exec php -l {} \\;",
+    "test": "for f in tests/regression/*.php; do php $f || exit 1; done"
+  },
+  "autoload": {"psr-4": {"WCPOS\\WooCommercePOS\\MollieTerminal\\": "includes/"}}
+}
