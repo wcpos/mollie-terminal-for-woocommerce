@@ -66,13 +66,20 @@ jobs:
         run: |
           set -euo pipefail
 
+          NOTES_FILE="docs/releases/$VERSION.md"
+          NOTES_ARGS=(--notes "Release v$VERSION")
+          if [ -f "$NOTES_FILE" ]; then
+            NOTES_ARGS=(--notes-file "$NOTES_FILE")
+          fi
+
           if gh release view "v$VERSION" >/dev/null 2>&1; then
             gh release upload "v$VERSION" mollie-terminal-for-woocommerce.zip --clobber
+            gh release edit "v$VERSION" "${NOTES_ARGS[@]}"
           else
             gh release create "v$VERSION" \
               mollie-terminal-for-woocommerce.zip \
               --title "Release v$VERSION" \
-              --notes "Release v$VERSION"
+              "${NOTES_ARGS[@]}"
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
