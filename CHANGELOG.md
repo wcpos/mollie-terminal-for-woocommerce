@@ -2,6 +2,14 @@
 
 All notable changes to Mollie Terminal for WooCommerce will be documented in this file.
 
+## 0.1.1 - 2026-06-30
+
+### Fixed
+
+- Added the WooCommerce order received URL as Mollie `redirectUrl` for terminal payment creation.
+- Removed `profileId` from the Mollie create-payment payload when using API-key authentication.
+- Added regression coverage for the documented `pointofsale`/`terminalId` payment payload.
+
 ## 0.1.0 - 2026-06-16
 
 ### Added
