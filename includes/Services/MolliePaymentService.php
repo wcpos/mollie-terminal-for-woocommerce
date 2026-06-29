@@ -44,7 +44,7 @@ class MolliePaymentService {
 				'description' => sprintf( 'Order #%s', $order->get_order_number() ),
 				'method' => 'pointofsale',
 				'terminalId' => $terminal_id,
-				'profileId' => $this->settings->profile_id(),
+				'redirectUrl' => $order->get_checkout_order_received_url(),
 				'webhookUrl' => $this->settings->webhook_url(),
 				'metadata' => array( 'order_id' => (string) $order->get_id(), 'terminal_id' => $terminal_id ),
 			);
