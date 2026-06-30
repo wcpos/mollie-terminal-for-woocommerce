@@ -62,7 +62,7 @@ expect( false !== strpos( $html, 'mtfwc-toggle-log' ), 'show logs control should
 expect( false !== strpos( $html, 'mtfwc-clear-log' ), 'clear logs control should render' );
 expect( false !== strpos( $html, 'mtfwc-copy-log' ), 'copy logs control should render' );
 expect( false !== strpos( $html, 'data-order-id="123"' ), 'order-pay controls should include order id' );
-expect( false !== strpos( $html, 'data-order-token="' ), 'order-pay controls should include order token' );
+expect( 1 === preg_match( '/data-order-token="[^"]+"/', $html ), 'order-pay controls should include a non-empty order token' );
 expect( false !== strpos( $html, 'term_default_for_test' ), 'payment fields should expose default terminal id' );
 
 echo "payment-fields-logs ok\n";

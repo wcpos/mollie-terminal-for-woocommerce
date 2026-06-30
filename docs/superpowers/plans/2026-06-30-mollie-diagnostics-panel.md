@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Server diagnostics storage
+## Task 1: Server diagnostics storage
 
 **Files:**
 - Create: `tests/regression/diagnostics.php`
@@ -33,7 +33,7 @@ Create `Diagnostics` with `record()`, `record_api_error()`, `recent_events()`, `
 
 Run `php tests/regression/diagnostics.php`. Expected output: `diagnostics ok`.
 
-### Task 2: Checkout/order-pay log panel markup
+## Task 2: Checkout/order-pay log panel markup
 
 **Files:**
 - Create: `tests/regression/payment-fields-logs.php`
@@ -56,7 +56,7 @@ Expose `AjaxHandler::order_token()` as a public static helper and use it in `Gat
 
 Run `php tests/regression/payment-fields-logs.php`. Expected output: `payment-fields-logs ok`.
 
-### Task 3: Diagnostic event instrumentation and browser logs
+## Task 3: Diagnostic event instrumentation and browser logs
 
 **Files:**
 - Modify: `includes/AjaxHandler.php`
@@ -79,7 +79,7 @@ Use localized `mtfwcPaymentData.ajaxUrl` and `defaultTerminalId`. Append timesta
 
 Style a utilitarian dark log panel with accessible buttons and readable monospace log output, matching the diagnostic purpose rather than adding decorative UI.
 
-### Task 4: Version, release notes, and validation
+## Task 4: Version, release notes, and validation
 
 **Files:**
 - Modify: `mollie-terminal-for-woocommerce.php`
