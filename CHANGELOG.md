@@ -2,6 +2,18 @@
 
 All notable changes to Mollie Terminal for WooCommerce will be documented in this file.
 
+## 0.1.2 - 2026-06-30
+
+### Added
+
+- Added a Mollie Terminal log panel to checkout and order-pay payment fields.
+- Added browser-side payment activity logs with show, copy, and clear controls.
+- Added redacted recent diagnostic events for AJAX, Mollie API, payment lifecycle, and webhook activity.
+
+### Fixed
+
+- Updated the Last API error diagnostic so Mollie API failures are actually persisted for support.
+
 ## 0.1.1 - 2026-06-30
 
 ### Fixed
