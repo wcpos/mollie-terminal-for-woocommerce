@@ -9,7 +9,7 @@
   "config": {"platform": {"php": "7.4"}, "platform-check": false, "sort-packages": true},
   "scripts": {
     "lint": "find . -path ./vendor -prune -o -name '*.php' -print -exec php -l {} \\;",
-    "test": "for f in tests/regression/*.php; do php $f || exit 1; done"
+    "test": "for f in tests/regression/*.php; do php $f || exit 1; done; node tests/regression/payment-js.js"
   },
   "autoload": {"psr-4": {"WCPOS\\WooCommercePOS\\MollieTerminal\\": "includes/"}}
 }
