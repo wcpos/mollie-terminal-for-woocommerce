@@ -7,6 +7,9 @@ class Logger {
 		if ( ! empty( $context ) ) {
 			$sanitized .= ' ' . wp_json_encode( self::redact_context( $context ) );
 		}
+		if ( class_exists( Diagnostics::class ) ) {
+			Diagnostics::record( 'info', $message, $context );
+		}
 		if ( function_exists( 'wc_get_logger' ) ) {
 			wc_get_logger()->info( $sanitized, array( 'source' => 'mollie-terminal-for-woocommerce' ) );
 			return;

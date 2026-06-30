@@ -12,6 +12,7 @@ function admin_url( $path = '' ) { return 'https://webshop.example.org/wp-admin/
 function add_query_arg( array $args, $url ) { return $url . ( false === strpos( $url, '?' ) ? '?' : '&' ) . http_build_query( $args ); }
 
 require_once __DIR__ . '/../../includes/Settings.php';
+require_once __DIR__ . '/../../includes/Diagnostics.php';
 require_once __DIR__ . '/../../includes/Utils/Money.php';
 require_once __DIR__ . '/../../includes/PaymentLock.php';
 require_once __DIR__ . '/../../includes/PaymentAttempt.php';

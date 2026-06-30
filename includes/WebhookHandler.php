@@ -14,15 +14,26 @@ class WebhookHandler {
 
 	public function handle(): void {
 		$payment_id = sanitize_text_field( wp_unslash( $_POST['id'] ?? $_GET['id'] ?? '' ) );
-		if ( '' === $payment_id ) { status_header( 200 ); echo 'OK'; exit; }
+		if ( '' === $payment_id ) {
+			Diagnostics::record( 'warning', 'Mollie webhook received without payment ID.' );
+			status_header( 200 ); echo 'OK'; exit;
+		}
+		Diagnostics::record( 'info', 'Mollie webhook received.', array( 'payment_id' => $payment_id ) );
 		try {
 			$settings = new Settings();
 			$payment = ( new MollieApiClient( $settings->api_key() ) )->get_payment( $payment_id );
 			$order = $this->find_order_for_payment( $payment_id, $payment );
-			if ( ! $order ) { Logger::log( 'Mollie webhook received for unknown payment.', array( 'payment_id' => $payment_id ) ); status_header( 200 ); echo 'OK'; exit; }
+			if ( ! $order ) {
+				Diagnostics::record( 'warning', 'Mollie webhook received for unknown payment.', array( 'payment_id' => $payment_id ) );
+				Logger::log( 'Mollie webhook received for unknown payment.', array( 'payment_id' => $payment_id ) ); status_header( 200 ); echo 'OK'; exit;
+			}
 			( new PaymentReconciler( $settings ) )->reconcile( $order, $payment, 'webhook' );
 			update_option( 'mtfwc_last_webhook_event', array( 'payment_id' => $payment_id, 'received_at' => gmdate( 'c' ) ), false );
-		} catch ( Exception $e ) { Logger::log( 'Mollie webhook failed: ' . $e->getMessage() ); }
+			Diagnostics::record( 'success', 'Mollie webhook reconciled.', array( 'payment_id' => $payment_id, 'order_id' => (int) $order->get_id(), 'status' => $payment['status'] ?? '' ) );
+		} catch ( Exception $e ) {
+			Diagnostics::record( 'error', 'Mollie webhook failed: ' . $e->getMessage(), array( 'payment_id' => $payment_id ) );
+			Logger::log( 'Mollie webhook failed: ' . $e->getMessage() );
+		}
 		status_header( 200 ); echo 'OK'; exit;
 	}
 
