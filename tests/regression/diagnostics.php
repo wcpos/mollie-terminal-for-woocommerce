@@ -42,9 +42,16 @@ $events = Diagnostics::recent_events();
 expect( count( $events ) === 2, 'Logger::log should append a diagnostic event' );
 expect( false === strpos( wp_json_encode( $events ), $secret ), 'logger diagnostic event should be redacted' );
 
+Logger::log( 'Mollie AJAX failed with Bearer ' . $secret, array( '_mtfwc_diagnostics_recorded' => true, 'terminal_id' => 'term_123' ) );
+$events = Diagnostics::recent_events();
+expect( count( $events ) === 2, 'Logger::log should not duplicate diagnostics when the caller already recorded one' );
+
 for ( $i = 0; $i < 60; $i++ ) {
 	Diagnostics::record( 'info', 'event ' . $i );
 }
-expect( count( Diagnostics::recent_events() ) === 50, 'diagnostic events should be capped at 50' );
+$events = Diagnostics::recent_events();
+expect( count( $events ) === 50, 'diagnostic events should be capped at 50' );
+expect( 'event 10' === $events[0]['message'], 'diagnostic events should retain the newest entries' );
+expect( 'event 59' === $events[49]['message'], 'diagnostic events should keep the most recent event' );
 
 echo "diagnostics ok\n";

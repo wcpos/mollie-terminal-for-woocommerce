@@ -36,7 +36,7 @@ class MollieApiClient {
 		$response = wp_remote_request( self::BASE_URL . $path, $args );
 		if ( is_wp_error( $response ) ) {
 			Diagnostics::record_api_error( 'Mollie API transport error: ' . $response->get_error_message(), array( 'method' => $method, 'path' => $path ) );
-			Logger::log( 'Mollie API transport error: ' . $response->get_error_message() );
+			Logger::log( 'Mollie API transport error: ' . $response->get_error_message(), array( Logger::CONTEXT_DIAGNOSTICS_RECORDED => true ) );
 			throw new RuntimeException( 'Mollie API request failed.' );
 		}
 		$code = (int) wp_remote_retrieve_response_code( $response );
@@ -46,7 +46,7 @@ class MollieApiClient {
 		if ( $code < 200 || $code >= 300 ) {
 			$message = $data['detail'] ?? $data['title'] ?? 'Mollie API error.';
 			Diagnostics::record_api_error( sprintf( 'Mollie API error (%s %s, HTTP %d): %s', $method, $path, $code, $message ), array( 'method' => $method, 'path' => $path, 'status' => $code, 'body' => $data ) );
-			Logger::log( 'Mollie API error', array( 'status' => $code, 'body' => $data ) );
+			Logger::log( 'Mollie API error', array( Logger::CONTEXT_DIAGNOSTICS_RECORDED => true, 'status' => $code, 'body' => $data ) );
 			throw new RuntimeException( $message );
 		}
 		Diagnostics::record( 'debug', sprintf( 'Mollie API request succeeded (%s %s).', $method, $path ), array( 'method' => $method, 'path' => $path, 'status' => $code ) );

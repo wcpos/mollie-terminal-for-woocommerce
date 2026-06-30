@@ -31,15 +31,13 @@ class AjaxHandler {
 	private function with_order( string $operation, callable $callback ): void {
 		try {
 			$order_id = absint( $_POST['order_id'] ?? 0 );
-			Diagnostics::record( 'info', 'Mollie Terminal AJAX request received.', array( 'operation' => $operation, 'order_id' => $order_id ) );
 			if ( ! $order_id ) {
-				Diagnostics::record( 'error', 'Mollie Terminal AJAX request missing order ID.', array( 'operation' => $operation ) );
 				wp_send_json_error( __( 'Order ID is required.', 'mollie-terminal-for-woocommerce' ), 400 );
 			}
 			if ( ! $this->can_access_order( $order_id ) ) {
-				Diagnostics::record( 'error', 'Mollie Terminal AJAX request unauthorized.', array( 'operation' => $operation, 'order_id' => $order_id ) );
 				wp_send_json_error( __( 'Unauthorized request.', 'mollie-terminal-for-woocommerce' ), 403 );
 			}
+			Diagnostics::record( 'info', 'Mollie Terminal AJAX request received.', array( 'operation' => $operation, 'order_id' => $order_id ) );
 			$order = wc_get_order( $order_id );
 			if ( ! $order ) {
 				Diagnostics::record( 'error', 'Mollie Terminal AJAX request used invalid order.', array( 'operation' => $operation, 'order_id' => $order_id ) );
@@ -50,7 +48,7 @@ class AjaxHandler {
 			wp_send_json_success( $result );
 		} catch ( Exception $e ) {
 			Diagnostics::record( 'error', 'Mollie Terminal AJAX failed: ' . $e->getMessage(), array( 'operation' => $operation ) );
-			Logger::log( 'Mollie Terminal AJAX failed: ' . $e->getMessage() );
+			Logger::log( 'Mollie Terminal AJAX failed: ' . $e->getMessage(), array( Logger::CONTEXT_DIAGNOSTICS_RECORDED => true ) );
 			wp_send_json_error( $e->getMessage(), 500 );
 		}
 	}
