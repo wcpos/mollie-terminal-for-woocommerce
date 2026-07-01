@@ -3,6 +3,8 @@
 
 	var MAX_LOG_LINES = 50;
 	var SENSITIVE_KEY_PATTERN = /(key|token|secret|authorization|password|bearer|metadata|customer|email)/i;
+	var DEFAULT_POLL_INTERVAL_MS = 2000;
+	var DEFAULT_POLL_TIMEOUT_MS = 300000;
 
 	function ready(callback) {
 		if (document.readyState === 'loading') {
@@ -16,8 +18,27 @@
 		return new Date().toISOString();
 	}
 
+	function nowMs() {
+		return (typeof Date !== 'undefined' && Date.now) ? Date.now() : 0;
+	}
+
+	function later(fn, ms) {
+		return ('function' === typeof setTimeout) ? setTimeout(fn, ms) : null;
+	}
+
+	function clearLater(id) {
+		if (id && 'function' === typeof clearTimeout) {
+			clearTimeout(id);
+		}
+	}
+
 	function getData() {
 		return window.mtfwcPaymentData || { ajaxUrl: '/wp-admin/admin-ajax.php', defaultTerminalId: '', i18n: {} };
+	}
+
+	function t(key, fallback) {
+		var i18n = getData().i18n || {};
+		return i18n[key] || fallback;
 	}
 
 	function storageKey(root) {
@@ -137,28 +158,46 @@
 		}
 	}
 
-	function sendRequest(root, action) {
+	function orderContext(root) {
+		return {
+			orderId: root.getAttribute('data-order-id') || '',
+			orderToken: root.getAttribute('data-order-token') || ''
+		};
+	}
+
+	function selectedTerminalId(root) {
+		var select = root.querySelector('.mtfwc-terminal-select');
+		if (select && select.value) {
+			return select.value;
+		}
+		return root.getAttribute('data-default-terminal-id') || getData().defaultTerminalId || '';
+	}
+
+	// Low-level AJAX call: logs the request/response but does not touch the
+	// status line or button state, so it is safe to reuse from the poll loop.
+	function postAction(root, action, extra) {
 		var data = getData();
-		var orderId = root.getAttribute('data-order-id') || '';
-		var orderToken = root.getAttribute('data-order-token') || '';
-		var terminalId = root.getAttribute('data-default-terminal-id') || data.defaultTerminalId || '';
+		var ctx = orderContext(root);
 		var body;
-		if (!orderId || orderId === '0') {
+		var key;
+		if (!ctx.orderId || ctx.orderId === '0') {
 			appendLog(root, 'error', 'Cannot send Mollie Terminal request because no order ID is available yet.');
-			setStatus(root, 'No order ID is available yet.', 'error');
-			return Promise.resolve();
+			return Promise.resolve({ ok: false, json: null, error: 'no_order' });
 		}
 
 		body = new FormData();
 		body.append('action', action);
-		body.append('order_id', orderId);
-		body.append('order_token', orderToken);
-		if (action === 'mtfwc_start_payment') {
-			body.append('terminal_id', terminalId);
+		body.append('order_id', ctx.orderId);
+		body.append('order_token', ctx.orderToken);
+		if (extra) {
+			for (key in extra) {
+				if (Object.prototype.hasOwnProperty.call(extra, key)) {
+					body.append(key, extra[key]);
+				}
+			}
 		}
 
-		appendLog(root, 'info', 'Sending ' + action + ' request.', { order_id: orderId, terminal_id: terminalId });
-		setStatus(root, 'Contacting Mollie Terminal...', 'info');
+		appendLog(root, 'info', 'Sending ' + action + ' request.', { order_id: ctx.orderId });
 
 		return fetch(data.ajaxUrl, { method: 'POST', credentials: 'same-origin', body: body })
 			.then(function (response) {
@@ -171,17 +210,36 @@
 			.then(function (result) {
 				if (!result.ok || !result.json || !result.json.success) {
 					appendLog(root, 'error', action + ' failed.', redactDetail(result.json || result.text || result.status));
-					setStatus(root, 'Mollie Terminal request failed. Copy logs for support.', 'error');
-					return result;
+				} else {
+					appendLog(root, 'success', action + ' succeeded.', responseSummary(result.json.data || {}));
 				}
-				appendLog(root, 'success', action + ' succeeded.', responseSummary(result.json.data || {}));
-				setStatus(root, 'Mollie Terminal status: ' + ((result.json.data && result.json.data.status) || 'ok'), 'success');
 				return result;
 			})
 			.catch(function (error) {
 				appendLog(root, 'error', action + ' network error: ' + error.message);
-				setStatus(root, 'Network error. Copy logs for support.', 'error');
+				return { ok: false, json: null, error: error.message };
 			});
+	}
+
+	function resultStatus(result) {
+		if (result && result.json && result.json.data && result.json.data.status) {
+			return String(result.json.data.status);
+		}
+		return '';
+	}
+
+	// Map a raw Mollie/reconciler status onto the flow's outcome buckets.
+	function classify(status) {
+		if ('paid' === status || 'already_paid' === status || 'conflict' === status) {
+			return 'paid';
+		}
+		if ('failed' === status || 'canceled' === status || 'expired' === status || 'verification_failed' === status) {
+			return 'failed';
+		}
+		if ('idle' === status) {
+			return 'idle';
+		}
+		return 'pending';
 	}
 
 	function setActionButtonsDisabled(root, disabled) {
@@ -197,33 +255,284 @@
 		}
 	}
 
-	function runAction(root, action) {
-		var request;
-		function unlock(result) {
-			root.setAttribute('data-mtfwc-request-pending', 'false');
-			setActionButtonsDisabled(root, false);
-			return result;
-		}
-		if (root.getAttribute('data-mtfwc-request-pending') === 'true') {
-			appendLog(root, 'warning', 'Ignoring duplicate Mollie Terminal action while a request is pending.');
-			return Promise.resolve();
-		}
-		root.setAttribute('data-mtfwc-request-pending', 'true');
-		setActionButtonsDisabled(root, true);
-		request = sendRequest(root, action);
-		if (request && 'function' === typeof request.then) {
-			return request.then(unlock, function (error) {
-				unlock();
-				throw error;
-			});
-		}
-		return Promise.resolve(unlock(request));
-	}
-
-	function bindAction(root, selector, action) {
+	function setButtonDisabled(root, selector, disabled) {
 		var button = root.querySelector(selector);
 		if (button) {
-			button.addEventListener('click', function () { runAction(root, action); });
+			button.disabled = disabled;
+		}
+	}
+
+	// --- Auto-poll loop -------------------------------------------------------
+
+	function stopAutoPoll(root) {
+		if (root.mtfwcPoll) {
+			clearLater(root.mtfwcPoll.timer);
+			root.mtfwcPoll = null;
+		}
+	}
+
+	function startAutoPoll(root) {
+		var data = getData();
+		var interval = data.pollIntervalMs || DEFAULT_POLL_INTERVAL_MS;
+		var timeout = data.pollTimeoutMs || DEFAULT_POLL_TIMEOUT_MS;
+		stopAutoPoll(root);
+		root.mtfwcPollSeq = (root.mtfwcPollSeq || 0) + 1;
+		root.mtfwcPoll = { deadline: nowMs() + timeout, timer: null, id: root.mtfwcPollSeq };
+		setStatus(root, t('waiting', 'Waiting for terminal…'), 'info');
+		setButtonDisabled(root, '.mtfwc-start-payment', true);
+		setButtonDisabled(root, '.mtfwc-cancel-payment', false);
+		schedulePoll(root, interval);
+	}
+
+	function schedulePoll(root, interval) {
+		if (!root.mtfwcPoll) {
+			return;
+		}
+		root.mtfwcPoll.timer = later(function () {
+			runPollTick(root, interval);
+		}, interval);
+	}
+
+	function runPollTick(root, interval) {
+		if (!root.mtfwcPoll) {
+			return;
+		}
+		var session = root.mtfwcPoll.id;
+		if (nowMs() > root.mtfwcPoll.deadline) {
+			stopAutoPoll(root);
+			setStatus(root, t('timedOut', 'Timed out waiting for the terminal. Check the terminal or try again.'), 'error');
+			resetToIdle(root);
+			return;
+		}
+		postAction(root, 'mtfwc_poll_payment').then(function (result) {
+			// Ignore a response that arrives after this poll session was stopped
+			// or superseded (e.g. a cancel/retry started a new session).
+			if (!root.mtfwcPoll || root.mtfwcPoll.id !== session) {
+				return;
+			}
+			var outcome = classify(resultStatus(result));
+			if ('paid' === outcome) {
+				completeOrder(root);
+			} else if ('failed' === outcome) {
+				stopAutoPoll(root);
+				setStatus(root, t('failed', 'Payment failed. You can try again.'), 'error');
+				resetToIdle(root);
+			} else if ('idle' === outcome) {
+				stopAutoPoll(root);
+				resetToIdle(root);
+			} else {
+				setStatus(root, t('waiting', 'Waiting for terminal…'), 'info');
+				schedulePoll(root, interval);
+			}
+		});
+	}
+
+	function resetToIdle(root) {
+		setButtonDisabled(root, '.mtfwc-start-payment', false);
+		setButtonDisabled(root, '.mtfwc-poll-payment', false);
+		setButtonDisabled(root, '.mtfwc-cancel-payment', false);
+	}
+
+	// Payment succeeded: finish the order the same way the POS "Process payment"
+	// button does — submit the order-pay form (#place_order). Fall back to the
+	// POS postMessage bridge when the button is not in this document.
+	function completeOrder(root) {
+		stopAutoPoll(root);
+		setStatus(root, t('completing', 'Payment complete — finishing order…'), 'success');
+		appendLog(root, 'success', 'Terminal payment complete; submitting order.');
+		if (root.mtfwcCompleted) {
+			return;
+		}
+		root.mtfwcCompleted = true;
+		// Re-enable the controls so the UI is not stuck if submitting the order
+		// does not navigate away (e.g. the button is not in this document).
+		resetToIdle(root);
+
+		var placeOrder = ('function' === typeof document.getElementById) ? document.getElementById('place_order') : null;
+		if (placeOrder && 'function' === typeof placeOrder.click) {
+			placeOrder.click();
+			return;
+		}
+		var orderReview = ('function' === typeof document.getElementById) ? document.getElementById('order_review') : null;
+		if (orderReview && 'function' === typeof orderReview.submit) {
+			orderReview.submit();
+			return;
+		}
+		if (window.top && 'function' === typeof window.top.postMessage) {
+			window.top.postMessage({ action: 'wcpos-process-payment' }, '*');
+		}
+	}
+
+	// --- User actions ---------------------------------------------------------
+
+	function onStart(root) {
+		if (root.getAttribute('data-mtfwc-request-pending') === 'true') {
+			appendLog(root, 'warning', 'Ignoring duplicate Start while a request is pending.');
+			return;
+		}
+		var terminalId = selectedTerminalId(root);
+		if (!terminalId) {
+			appendLog(root, 'warning', 'Start blocked because no terminal is selected yet.');
+			setStatus(root, t('selectTerminal', 'Select a terminal first.'), 'warning');
+			return;
+		}
+		root.mtfwcCompleted = false;
+		root.setAttribute('data-mtfwc-request-pending', 'true');
+		stopAutoPoll(root);
+		setActionButtonsDisabled(root, true);
+		setStatus(root, t('sending', 'Sending to terminal…'), 'info');
+		postAction(root, 'mtfwc_start_payment', { terminal_id: terminalId }).then(function (result) {
+			root.setAttribute('data-mtfwc-request-pending', 'false');
+			if (!result || !result.ok || !result.json || !result.json.success) {
+				setStatus(root, t('failed', 'Payment failed. You can try again.'), 'error');
+				resetToIdle(root);
+				return;
+			}
+			var outcome = classify(resultStatus(result));
+			if ('paid' === outcome) {
+				completeOrder(root);
+			} else if ('failed' === outcome) {
+				setStatus(root, t('failed', 'Payment failed. You can try again.'), 'error');
+				resetToIdle(root);
+			} else {
+				startAutoPoll(root);
+			}
+		});
+	}
+
+	function onCancel(root) {
+		if (root.getAttribute('data-mtfwc-request-pending') === 'true') {
+			appendLog(root, 'warning', 'Ignoring duplicate Cancel while a request is pending.');
+			return;
+		}
+		var wasPolling = !!root.mtfwcPoll;
+		root.setAttribute('data-mtfwc-request-pending', 'true');
+		stopAutoPoll(root);
+		setActionButtonsDisabled(root, true);
+		setStatus(root, 'Contacting Mollie Terminal…', 'info');
+		postAction(root, 'mtfwc_cancel_payment').then(function (result) {
+			root.setAttribute('data-mtfwc-request-pending', 'false');
+			var status = resultStatus(result);
+			if ('not_cancelable' === status) {
+				setStatus(root, t('notCancelable', 'This payment can no longer be canceled.'), 'warning');
+				if (wasPolling) {
+					startAutoPoll(root);
+				} else {
+					resetToIdle(root);
+				}
+				return;
+			}
+			var outcome = classify(status);
+			if ('paid' === outcome) {
+				completeOrder(root);
+			} else if ('failed' === outcome) {
+				setStatus(root, t('canceled', 'Payment canceled.'), 'info');
+				resetToIdle(root);
+			} else {
+				resetToIdle(root);
+			}
+		});
+	}
+
+	// Manual "Check Status" button: a one-off poll for support/debugging.
+	function onManualPoll(root) {
+		if (root.getAttribute('data-mtfwc-request-pending') === 'true') {
+			appendLog(root, 'warning', 'Ignoring duplicate Check Status while a request is pending.');
+			return;
+		}
+		root.setAttribute('data-mtfwc-request-pending', 'true');
+		setButtonDisabled(root, '.mtfwc-poll-payment', true);
+		postAction(root, 'mtfwc_poll_payment').then(function (result) {
+			root.setAttribute('data-mtfwc-request-pending', 'false');
+			setButtonDisabled(root, '.mtfwc-poll-payment', false);
+			var status = resultStatus(result);
+			setStatus(root, 'Mollie Terminal status: ' + (status || 'ok'), 'info');
+			if ('paid' === classify(status)) {
+				completeOrder(root);
+			}
+		});
+	}
+
+	// --- Terminal dropdown ----------------------------------------------------
+
+	function loadTerminals(root) {
+		var select = root.querySelector('.mtfwc-terminal-select');
+		var ctx = orderContext(root);
+		if (!select || !ctx.orderId || ctx.orderId === '0') {
+			return;
+		}
+		postAction(root, 'mtfwc_list_terminals').then(function (result) {
+			if (!result || !result.ok || !result.json || !result.json.success) {
+				appendLog(root, 'warning', t('terminalsFailed', 'Could not load terminals.'));
+				select.disabled = false;
+				select.setAttribute('aria-busy', 'false');
+				return;
+			}
+			populateTerminals(root, select, result.json.data || {});
+		});
+	}
+
+	function populateTerminals(root, select, data) {
+		var terminals = (data && data.terminals) || [];
+		var preferred = root.getAttribute('data-default-terminal-id') || data.default_terminal_id || '';
+		var i;
+		var option;
+		var terminal;
+		var label;
+		clearOptions(select);
+		if (!terminals.length) {
+			createOption(select, '', t('noTerminals', 'No terminals found on this Mollie account.'));
+			select.disabled = true;
+			select.setAttribute('aria-busy', 'false');
+			appendLog(root, 'warning', t('noTerminals', 'No terminals found on this Mollie account.'));
+			return;
+		}
+		for (i = 0; i < terminals.length; i++) {
+			terminal = terminals[i];
+			label = terminal.label || terminal.id;
+			if (terminal.status && 'active' !== terminal.status) {
+				label += ' (' + terminal.status + ')';
+			}
+			option = createOption(select, terminal.id, label);
+			if (terminal.id === preferred) {
+				option.selected = true;
+				select.value = terminal.id;
+			}
+		}
+		if (!select.value && terminals[0]) {
+			select.value = terminals[0].id;
+		}
+		select.disabled = false;
+		select.setAttribute('aria-busy', 'false');
+	}
+
+	function clearOptions(select) {
+		if ('string' === typeof select.innerHTML) {
+			select.innerHTML = '';
+		}
+		select.options = [];
+	}
+
+	function createOption(select, value, label) {
+		var option;
+		if (window.document && 'function' === typeof window.document.createElement) {
+			option = window.document.createElement('option');
+			option.value = value;
+			option.textContent = label;
+			select.appendChild(option);
+		} else {
+			option = { value: value, textContent: label, selected: false };
+		}
+		(select.options = select.options || []).push(option);
+		return option;
+	}
+
+	// --- Binding --------------------------------------------------------------
+
+	function bindClick(root, selector, handler) {
+		var button = root.querySelector(selector);
+		if (button) {
+			button.addEventListener('click', function () { handler(root); });
 		}
 	}
 
@@ -244,7 +553,7 @@
 				var expanded = toggle.getAttribute('data-expanded') === 'true';
 				toggle.setAttribute('data-expanded', expanded ? 'false' : 'true');
 				content.style.display = expanded ? 'none' : 'block';
-				toggle.textContent = expanded ? (getData().i18n.logsHidden || 'Show logs') : (getData().i18n.logsShown || 'Hide logs');
+				toggle.textContent = expanded ? t('logsHidden', 'Show logs') : t('logsShown', 'Hide logs');
 			});
 		}
 		clear = root.querySelector('.mtfwc-clear-log');
@@ -267,20 +576,21 @@
 				}
 				if (navigator.clipboard && navigator.clipboard.writeText) {
 					navigator.clipboard.writeText(textarea.value).then(function () {
-						appendLog(root, 'success', getData().i18n.copied || 'Logs copied to clipboard.');
+						appendLog(root, 'success', t('copied', 'Logs copied to clipboard.'));
 					}).catch(function () {
-						appendLog(root, 'warning', getData().i18n.copyFailed || 'Unable to copy logs automatically.');
+						appendLog(root, 'warning', t('copyFailed', 'Unable to copy logs automatically.'));
 					});
 				} else {
 					textarea.focus();
 					textarea.select();
-					appendLog(root, 'warning', getData().i18n.copyFailed || 'Unable to copy logs automatically.');
+					appendLog(root, 'warning', t('copyFailed', 'Unable to copy logs automatically.'));
 				}
 			});
 		}
-		bindAction(root, '.mtfwc-start-payment', 'mtfwc_start_payment');
-		bindAction(root, '.mtfwc-poll-payment', 'mtfwc_poll_payment');
-		bindAction(root, '.mtfwc-cancel-payment', 'mtfwc_cancel_payment');
+		bindClick(root, '.mtfwc-start-payment', onStart);
+		bindClick(root, '.mtfwc-poll-payment', onManualPoll);
+		bindClick(root, '.mtfwc-cancel-payment', onCancel);
+		loadTerminals(root);
 	}
 
 	function bindAll() {

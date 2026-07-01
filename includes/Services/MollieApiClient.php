@@ -13,7 +13,7 @@ class MollieApiClient {
 	public function has_api_key(): bool { return '' !== trim( $this->api_key ); }
 
 	public function get_profile( string $profile_id = 'me' ): array { return $this->request( 'GET', '/profiles/' . rawurlencode( $profile_id ) ); }
-	public function list_terminals( string $profile_id ): array { return $this->request( 'GET', '/terminals?profileId=' . rawurlencode( $profile_id ) ); }
+	public function list_terminals( string $profile_id = '' ): array { return $this->request( 'GET', '/terminals?limit=250' . ( '' !== $profile_id ? '&profileId=' . rawurlencode( $profile_id ) : '' ) ); }
 	public function get_terminal( string $terminal_id ): array { return $this->request( 'GET', '/terminals/' . rawurlencode( $terminal_id ) ); }
 	public function create_terminal_pairing_code( string $profile_id, string $name ): array { return $this->request( 'POST', '/terminals', array( 'profileId' => $profile_id, 'description' => $name ) ); }
 	public function create_payment( array $payload ): array { return $this->request( 'POST', '/payments', $payload ); }

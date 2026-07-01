@@ -9,7 +9,7 @@ use WCPOS\WooCommercePOS\MollieTerminal\Services\TerminalService;
 class AjaxHandler {
 	public function __construct() {
 		if ( ! function_exists( 'add_action' ) || ! wp_doing_ajax() ) { return; }
-		foreach ( array( 'mtfwc_start_payment', 'mtfwc_poll_payment', 'mtfwc_cancel_payment' ) as $action ) {
+		foreach ( array( 'mtfwc_start_payment', 'mtfwc_poll_payment', 'mtfwc_cancel_payment', 'mtfwc_list_terminals' ) as $action ) {
 			add_action( 'wp_ajax_' . $action, array( $this, $action ) );
 			add_action( 'wp_ajax_nopriv_' . $action, array( $this, $action ) );
 		}
@@ -19,6 +19,38 @@ class AjaxHandler {
 	public function mtfwc_start_payment(): void { $this->with_order( 'start_payment', function ( $order ) { return $this->payment_service()->start_payment_for_order( $order, sanitize_text_field( wp_unslash( $_POST['terminal_id'] ?? '' ) ) ); } ); }
 	public function mtfwc_poll_payment(): void { $this->with_order( 'poll_payment', function ( $order ) { return $this->payment_service()->poll_order( $order ); } ); }
 	public function mtfwc_cancel_payment(): void { $this->with_order( 'cancel_payment', function ( $order ) { return $this->payment_service()->cancel_order_payment( $order ); } ); }
+
+	public function mtfwc_list_terminals(): void {
+		$order_id = absint( $_POST['order_id'] ?? 0 );
+		if ( ! $order_id || ! $this->can_access_order( $order_id ) ) {
+			wp_send_json_error( __( 'Unauthorized request.', 'mollie-terminal-for-woocommerce' ), 403 );
+		}
+		try {
+			$default = $this->settings()->default_terminal_id();
+			$items   = self::normalize_terminals( $this->terminal_service()->list_terminals() );
+			Diagnostics::record( 'info', 'Mollie Terminal list retrieved.', array( 'order_id' => $order_id, 'count' => count( $items ) ) );
+			wp_send_json_success( array( 'terminals' => $items, 'default_terminal_id' => $default ) );
+		} catch ( Exception $e ) {
+			Diagnostics::record( 'error', 'Mollie Terminal list failed: ' . $e->getMessage(), array( 'order_id' => $order_id ) );
+			wp_send_json_error( $e->getMessage(), 500 );
+		}
+	}
+
+	public static function normalize_terminals( array $terminals ): array {
+		$items = array();
+		foreach ( $terminals as $terminal ) {
+			if ( ! is_array( $terminal ) ) { continue; }
+			$id = (string) ( $terminal['id'] ?? '' );
+			if ( '' === $id ) { continue; }
+			$items[] = array(
+				'id'     => $id,
+				'label'  => (string) ( $terminal['description'] ?? $terminal['brand'] ?? $id ),
+				'status' => (string) ( $terminal['status'] ?? '' ),
+				'mode'   => (string) ( $terminal['mode'] ?? '' ),
+			);
+		}
+		return $items;
+	}
 
 	public function mtfwc_pair_terminal(): void {
 		if ( ! current_user_can( 'manage_woocommerce' ) || ! check_ajax_referer( 'mtfwc_admin_actions', 'nonce', false ) ) { wp_send_json_error( __( 'Security check failed', 'mollie-terminal-for-woocommerce' ), 403 ); }
