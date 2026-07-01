@@ -22,6 +22,31 @@
 	color: #475569;
 }
 
+.mtfwc-terminal-field {
+	display: flex;
+	flex-direction: column;
+	gap: .25rem;
+	margin-top: .875rem;
+}
+
+.mtfwc-terminal-label {
+	font-weight: 600;
+	color: #475569;
+}
+
+.mtfwc-terminal-select {
+	box-sizing: border-box;
+	max-width: 100%;
+	padding: .4rem .5rem;
+	border: 1px solid #cbd5e1;
+	border-radius: 6px;
+	background: #fff;
+}
+
+.mtfwc-terminal-select[aria-busy="true"] {
+	opacity: .6;
+}
+
 .mtfwc-payment-actions {
 	display: flex;
 	flex-wrap: wrap;
@@ -37,6 +62,7 @@
 .mtfwc-status-info { color: #1d4ed8; }
 .mtfwc-status-success { color: #047857; }
 .mtfwc-status-error { color: #b91c1c; }
+.mtfwc-status-warning { color: #b45309; }
 
 .mtfwc-logging-section {
 	background: #111827;
