@@ -69,6 +69,50 @@ $panel = ob_get_clean();
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mollie Terminal — payment panel preview</title>
 <link rel="stylesheet" href="../../assets/css/payment.css">
+<style id="hostile-theme">
+	/* Deliberately hostile "theme" CSS mimicking what real WooCommerce themes
+	   ship (aggressive .button/select/h4 rules, often with !important and
+	   high-specificity selectors). The plugin panel must look identical with
+	   this block enabled or disabled — that is the hardening contract for
+	   assets/css/payment.css. Toggle it from the preview controls. */
+	.woocommerce-page #payment .button,
+	.woocommerce-page button.button {
+		background: #d63638 !important;
+		color: #fff000 !important;
+		border: 4px dashed #000 !important;
+		border-radius: 0 !important;
+		text-transform: uppercase !important;
+		letter-spacing: 3px !important;
+		font-family: "Comic Sans MS", cursive !important;
+		font-size: 19px !important;
+		padding: 25px 40px !important;
+		box-shadow: 0 8px 0 #000 !important;
+		width: 100% !important;
+		min-height: 80px !important;
+		text-shadow: 2px 2px 0 #000 !important;
+	}
+	.woocommerce-page #payment select {
+		background: #000 !important;
+		color: #0f0 !important;
+		border: 5px solid #f0f !important;
+		border-radius: 30px !important;
+		padding: 30px !important;
+		font-size: 22px !important;
+		-webkit-appearance: none !important;
+		appearance: none !important;
+	}
+	.woocommerce-page #payment h4 {
+		font-size: 40px !important;
+		color: #f0f !important;
+		text-transform: uppercase !important;
+		margin: 40px 0 !important;
+		text-decoration: underline wavy !important;
+	}
+	.woocommerce-page #payment p { font-size: 22px; color: #d63638; margin: 30px 0; font-style: italic; }
+	.woocommerce-page #payment label { text-transform: uppercase; font-size: 20px; color: #d63638; letter-spacing: 4px; }
+	.woocommerce-page #payment textarea { background: #fff !important; color: #000 !important; min-height: 40px !important; border-radius: 0 !important; }
+	.woocommerce-page #payment div { line-height: 2.4; }
+</style>
 <style>
 	/* Approximation of the POS checkout modal so the panel is previewed in context. */
 	body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #64748b; }
@@ -83,11 +127,13 @@ $panel = ob_get_clean();
 </style>
 </head>
 <body>
-<div class="pos-modal">
+<div class="pos-modal woocommerce-page">
 	<h2>Order afrekenen #6915</h2>
 	<div class="pos-amount">Te betalen bedrag: € 2,99</div>
-	<div class="pos-method">Mollie Terminal</div>
-	<?php echo $panel; ?>
+	<div id="payment">
+		<div class="pos-method">Mollie Terminal</div>
+		<?php echo $panel; ?>
+	</div>
 </div>
 <div class="preview-controls">
 	<strong>Mock backend:</strong>
@@ -95,6 +141,7 @@ $panel = ob_get_clean();
 	<button type="button" onclick="window.mtfwcMock.mode='failed'">next poll: failed</button>
 	<button type="button" onclick="window.mtfwcMock.mode='pending'">polls stay pending</button>
 	<span>current: <code id="mock-mode">pending</code></span>
+	<label><input type="checkbox" checked onchange="document.getElementById('hostile-theme').disabled = !this.checked"> hostile theme CSS</label>
 </div>
 <script>
 	window.mtfwcPaymentData = {
