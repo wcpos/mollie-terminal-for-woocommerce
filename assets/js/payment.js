@@ -409,7 +409,7 @@
 		root.setAttribute('data-mtfwc-request-pending', 'true');
 		stopAutoPoll(root);
 		setActionButtonsDisabled(root, true);
-		setStatus(root, 'Contacting Mollie Terminal…', 'info');
+		setStatus(root, t('contacting', 'Contacting Mollie Terminal…'), 'info');
 		postAction(root, 'mtfwc_cancel_payment').then(function (result) {
 			root.setAttribute('data-mtfwc-request-pending', 'false');
 			var status = resultStatus(result);
@@ -445,6 +445,10 @@
 		postAction(root, 'mtfwc_poll_payment').then(function (result) {
 			root.setAttribute('data-mtfwc-request-pending', 'false');
 			setButtonDisabled(root, '.mtfwc-poll-payment', false);
+			if (!result || !result.ok || !result.json || !result.json.success) {
+				setStatus(root, t('checkFailed', 'Status check failed. Copy logs for support.'), 'error');
+				return;
+			}
 			var status = resultStatus(result);
 			setStatus(root, 'Mollie Terminal status: ' + (status || 'ok'), 'info');
 			if ('paid' === classify(status)) {
@@ -475,17 +479,23 @@
 	function populateTerminals(root, select, data) {
 		var terminals = (data && data.terminals) || [];
 		var preferred = root.getAttribute('data-default-terminal-id') || data.default_terminal_id || '';
+		var hasPreferred = !!preferred && terminals.some(function (item) { return item.id === preferred; });
 		var i;
-		var option;
 		var terminal;
 		var label;
 		clearOptions(select);
 		if (!terminals.length) {
-			createOption(select, '', t('noTerminals', 'No terminals found on this Mollie account.'));
+			select.appendChild(createOption('', t('noTerminals', 'No terminals found on this Mollie account.')));
 			select.disabled = true;
 			select.setAttribute('aria-busy', 'false');
 			appendLog(root, 'warning', t('noTerminals', 'No terminals found on this Mollie account.'));
 			return;
+		}
+		// If the saved default is not in the list (paginated/removed/filtered),
+		// force an explicit choice rather than silently dispatching to the
+		// first terminal, which could be the wrong physical device.
+		if (!hasPreferred) {
+			select.appendChild(createOption('', t('selectTerminalOption', '— Select a terminal —')));
 		}
 		for (i = 0; i < terminals.length; i++) {
 			terminal = terminals[i];
@@ -493,37 +503,27 @@
 			if (terminal.status && 'active' !== terminal.status) {
 				label += ' (' + terminal.status + ')';
 			}
-			option = createOption(select, terminal.id, label);
-			if (terminal.id === preferred) {
-				option.selected = true;
-				select.value = terminal.id;
-			}
+			select.appendChild(createOption(terminal.id, label));
 		}
-		if (!select.value && terminals[0]) {
-			select.value = terminals[0].id;
-		}
+		select.value = hasPreferred ? preferred : '';
 		select.disabled = false;
 		select.setAttribute('aria-busy', 'false');
 	}
 
 	function clearOptions(select) {
-		if ('string' === typeof select.innerHTML) {
-			select.innerHTML = '';
+		if ('function' === typeof select.replaceChildren) {
+			select.replaceChildren();
+			return;
 		}
-		select.options = [];
+		while (select.firstChild) {
+			select.removeChild(select.firstChild);
+		}
 	}
 
-	function createOption(select, value, label) {
-		var option;
-		if (window.document && 'function' === typeof window.document.createElement) {
-			option = window.document.createElement('option');
-			option.value = value;
-			option.textContent = label;
-			select.appendChild(option);
-		} else {
-			option = { value: value, textContent: label, selected: false };
-		}
-		(select.options = select.options || []).push(option);
+	function createOption(value, label) {
+		var option = document.createElement('option');
+		option.value = value;
+		option.textContent = label;
 		return option;
 	}
 

@@ -24,6 +24,14 @@ class FakeElement {
 		this.clickCount = 0;
 	}
 	append(child) { this.children.push(child); return child; }
+	appendChild(child) { this.children.push(child); return child; }
+	removeChild(child) { const i = this.children.indexOf(child); if (i >= 0) { this.children.splice(i, 1); } return child; }
+	replaceChildren() { this.children = []; }
+	get firstChild() { return this.children[0] || null; }
+	// Mirror the real DOM: HTMLSelectElement.options is a read-only collection.
+	// Defining it as a getter with no setter means any `select.options = ...`
+	// throws in strict mode, exactly as a browser would (regression guard).
+	get options() { return makeNodeList(this.children.filter((c) => 'option' === c.tagName)); }
 	setAttribute(name, value) { this.attributes[name] = String(value); }
 	getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null; }
 	addEventListener(type, callback) { (this.listeners[type] = this.listeners[type] || []).push(callback); }
@@ -110,6 +118,7 @@ async function flush() {
 			readyState: 'complete',
 			body: nativeBody,
 			addEventListener() {},
+			createElement(tag) { const el = new FakeElement([]); el.tagName = tag; return el; },
 			getElementById(id) { return 'place_order' === id ? placeOrderButton : null; },
 			querySelectorAll(selector) { return '.mtfwc-payment-interface' === selector ? panels.slice() : []; },
 		},

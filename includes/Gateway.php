@@ -187,7 +187,10 @@ class Gateway extends WC_Payment_Gateway {
 					'canceled' => __( 'Payment canceled.', 'mollie-terminal-for-woocommerce' ),
 					'timedOut' => __( 'Timed out waiting for the terminal. Check the terminal or try again.', 'mollie-terminal-for-woocommerce' ),
 					'notCancelable' => __( 'This payment can no longer be canceled.', 'mollie-terminal-for-woocommerce' ),
+					'contacting' => __( 'Contacting Mollie Terminal…', 'mollie-terminal-for-woocommerce' ),
+					'checkFailed' => __( 'Status check failed. Copy logs for support.', 'mollie-terminal-for-woocommerce' ),
 					'noTerminals' => __( 'No terminals found on this Mollie account.', 'mollie-terminal-for-woocommerce' ),
+					'selectTerminalOption' => __( '— Select a terminal —', 'mollie-terminal-for-woocommerce' ),
 					'terminalsFailed' => __( 'Could not load terminals.', 'mollie-terminal-for-woocommerce' ),
 				),
 			)
