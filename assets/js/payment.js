@@ -412,6 +412,11 @@
 		setStatus(root, t('contacting', 'Contacting Mollie Terminal…'), 'info');
 		postAction(root, 'mtfwc_cancel_payment').then(function (result) {
 			root.setAttribute('data-mtfwc-request-pending', 'false');
+			if (!result || !result.ok || !result.json || !result.json.success) {
+				setStatus(root, t('requestFailed', 'Mollie Terminal request failed. Copy logs for support.'), 'error');
+				resetToIdle(root);
+				return;
+			}
 			var status = resultStatus(result);
 			if ('not_cancelable' === status) {
 				setStatus(root, t('notCancelable', 'This payment can no longer be canceled.'), 'warning');

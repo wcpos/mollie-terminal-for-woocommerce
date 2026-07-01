@@ -153,6 +153,13 @@ async function flush() {
 		return flush();
 	}
 
+	function resolveError() {
+		const resolve = pendingFetches.shift();
+		assert(resolve, 'expected a pending fetch request');
+		resolve({ ok: false, status: 500, text: () => Promise.resolve('{"success":false}') });
+		return flush();
+	}
+
 	async function fireTimers() {
 		const due = Object.keys(timers);
 		due.forEach((id) => { const fn = timers[id]; delete timers[id]; fn(); });
@@ -224,6 +231,13 @@ async function flush() {
 	poll.click();
 	await resolveNext({ status: 'paid' });
 	assert.strictEqual(placeOrderButton.clickCount, 1, 'order completion should be idempotent');
+
+	// A failed cancel request must surface an error, not silently reset with a stale status.
+	cancel.click();
+	await resolveError();
+	const statusEl = panel.querySelector('.mtfwc-payment-status');
+	assert(/failed/i.test(statusEl.textContent), 'a failed cancel should show an error status');
+	assert.strictEqual(cancel.disabled, false, 'buttons re-enable after a failed cancel');
 
 	// Checkout refresh should bind new panels exactly once.
 	const refreshedPanel = makePanel('456');
