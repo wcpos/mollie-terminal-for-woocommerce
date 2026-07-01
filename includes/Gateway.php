@@ -17,6 +17,7 @@ class Gateway extends WC_Payment_Gateway {
 		$this->title = $this->get_option( 'title', __( 'Mollie Terminal', 'mollie-terminal-for-woocommerce' ) );
 		$this->description = $this->get_option( 'description', __( 'Pay in person using Mollie Terminal.', 'mollie-terminal-for-woocommerce' ) );
 		add_action( 'woocommerce_update_options_payment_gateways_' . $this->id, array( $this, 'process_admin_options' ) );
+		add_action( 'woocommerce_update_options_payment_gateways_' . $this->id, array( $this, 'clear_terminal_cache' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_scripts' ) );
 		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_payment_scripts' ) );
 	}
@@ -66,8 +67,14 @@ class Gateway extends WC_Payment_Gateway {
 		if ( Settings::GATEWAY_ID !== $section ) { return null; }
 		$settings = new Settings();
 		if ( '' === $settings->api_key() ) { return null; }
+		// Cache the fetched list so repeated settings-page renders don't each make
+		// an HTTP call, and use a short timeout so a cache miss during a Mollie
+		// outage fails fast to the text-field fallback instead of hanging admin.
+		$cache_key = 'mtfwc_terminal_options_' . $settings->mode();
+		$cached = get_transient( $cache_key );
+		if ( is_array( $cached ) ) { return $cached; }
 		try {
-			$terminals = ( new TerminalService( new MollieApiClient( $settings->api_key() ), $settings ) )->list_terminals();
+			$terminals = ( new TerminalService( new MollieApiClient( $settings->api_key() ), $settings ) )->list_terminals( 8 );
 		} catch ( \Exception $e ) {
 			return null;
 		}
@@ -75,6 +82,7 @@ class Gateway extends WC_Payment_Gateway {
 		foreach ( AjaxHandler::normalize_terminals( $terminals ) as $terminal ) {
 			$options[ $terminal['id'] ] = sprintf( '%s (%s)', $terminal['label'], $terminal['id'] );
 		}
+		set_transient( $cache_key, $options, 5 * MINUTE_IN_SECONDS );
 		return $options;
 	}
 
@@ -161,6 +169,10 @@ class Gateway extends WC_Payment_Gateway {
 		echo '<noscript>' . esc_html__( 'Please enable JavaScript to use the Mollie Terminal integration.', 'mollie-terminal-for-woocommerce' ) . '</noscript>';
 	}
 
+	public function clear_terminal_cache(): void {
+		delete_transient( 'mtfwc_terminal_options_test' );
+		delete_transient( 'mtfwc_terminal_options_live' );
+	}
 	private function row( string $label, string $value ): void { echo '<tr><th>' . esc_html( $label ) . '</th><td><code>' . esc_html( $value ) . '</code></td></tr>'; }
 	public function enqueue_admin_scripts(): void { wp_enqueue_script( 'mtfwc-admin', MTFWC_PLUGIN_URL . 'assets/js/admin.js', array( 'jquery' ), MTFWC_VERSION, true ); }
 	public function enqueue_payment_scripts(): void {
