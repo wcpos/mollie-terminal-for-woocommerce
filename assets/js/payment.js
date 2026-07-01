@@ -165,7 +165,16 @@
 		};
 	}
 
+	function isLocked(root) {
+		return root.getAttribute('data-lock-terminal') === '1';
+	}
+
 	function selectedTerminalId(root) {
+		if (isLocked(root)) {
+			// Selection is locked: the default terminal is always used (the
+			// server enforces this too).
+			return root.getAttribute('data-default-terminal-id') || getData().defaultTerminalId || '';
+		}
 		var select = root.querySelector('.mtfwc-terminal-select');
 		if (select && select.value) {
 			return select.value;
@@ -199,7 +208,14 @@
 
 		appendLog(root, 'info', 'Sending ' + action + ' request.', { order_id: ctx.orderId });
 
-		return fetch(data.ajaxUrl, { method: 'POST', credentials: 'same-origin', body: body })
+		var headers = {};
+		if (root.getAttribute('data-pos') === '1') {
+			// Lets woocommerce_pos_request() identify this AJAX call as coming
+			// from the POS, so paid responses carry the POS thank-you URL.
+			headers['X-WCPOS'] = '1';
+		}
+
+		return fetch(data.ajaxUrl, { method: 'POST', credentials: 'same-origin', headers: headers, body: body })
 			.then(function (response) {
 				return response.text().then(function (text) {
 					var json = null;
@@ -224,6 +240,13 @@
 	function resultStatus(result) {
 		if (result && result.json && result.json.data && result.json.data.status) {
 			return String(result.json.data.status);
+		}
+		return '';
+	}
+
+	function resultRedirect(result) {
+		if (result && result.json && result.json.data && result.json.data.redirect_url) {
+			return String(result.json.data.redirect_url);
 		}
 		return '';
 	}
@@ -262,6 +285,29 @@
 		}
 	}
 
+	// Drives the spinner on the status banner while a request/payment is in flight.
+	function setBusy(root, busy) {
+		root.setAttribute('data-mtfwc-busy', busy ? 'true' : 'false');
+	}
+
+	// The terminal choice is fixed once a payment is in flight. Re-enabling is
+	// skipped for locked panels and for selects that are unavailable (no
+	// terminals) or still loading.
+	function setSelectDisabled(root, disabled) {
+		var select = root.querySelector('.mtfwc-terminal-select');
+		if (!select) {
+			return;
+		}
+		if (disabled) {
+			select.disabled = true;
+			return;
+		}
+		if (isLocked(root) || select.getAttribute('data-mtfwc-unavailable') === '1' || select.getAttribute('aria-busy') === 'true') {
+			return;
+		}
+		select.disabled = false;
+	}
+
 	// --- Auto-poll loop -------------------------------------------------------
 
 	function stopAutoPoll(root) {
@@ -278,6 +324,7 @@
 		stopAutoPoll(root);
 		root.mtfwcPollSeq = (root.mtfwcPollSeq || 0) + 1;
 		root.mtfwcPoll = { deadline: nowMs() + timeout, timer: null, id: root.mtfwcPollSeq };
+		setBusy(root, true);
 		setStatus(root, t('waiting', 'Waiting for terminal…'), 'info');
 		setButtonDisabled(root, '.mtfwc-start-payment', true);
 		setButtonDisabled(root, '.mtfwc-cancel-payment', false);
@@ -300,8 +347,30 @@
 		var session = root.mtfwcPoll.id;
 		if (nowMs() > root.mtfwcPoll.deadline) {
 			stopAutoPoll(root);
-			setStatus(root, t('timedOut', 'Timed out waiting for the terminal. Check the terminal or try again.'), 'error');
-			resetToIdle(root);
+			// Don't leave the payment lingering "open" on the Mollie side —
+			// after the timeout, actively cancel it.
+			var seqAtTimeout = root.mtfwcPollSeq;
+			setStatus(root, t('timedOutCanceling', 'Timed out waiting for the terminal — canceling the payment…'), 'error');
+			appendLog(root, 'warning', 'Auto-poll timed out; sending cancel to Mollie.');
+			postAction(root, 'mtfwc_cancel_payment').then(function (result) {
+				// A new attempt may have started while this cancel was in
+				// flight — leave the new attempt's UI alone.
+				if (root.mtfwcPoll || root.mtfwcCompleted || root.mtfwcPollSeq !== seqAtTimeout || root.getAttribute('data-mtfwc-request-pending') === 'true') {
+					return;
+				}
+				var status = resultStatus(result);
+				if ('paid' === classify(status)) {
+					// The customer paid at the very last moment — complete instead.
+					completeOrder(root, resultRedirect(result));
+					return;
+				}
+				if ('not_cancelable' === status) {
+					setStatus(root, t('notCancelable', 'This payment can no longer be canceled.'), 'warning');
+				} else {
+					setStatus(root, t('timedOut', 'Timed out waiting for the terminal. Check the terminal or try again.'), 'error');
+				}
+				resetToIdle(root);
+			});
 			return;
 		}
 		postAction(root, 'mtfwc_poll_payment').then(function (result) {
@@ -312,7 +381,7 @@
 			}
 			var outcome = classify(resultStatus(result));
 			if ('paid' === outcome) {
-				completeOrder(root);
+				completeOrder(root, resultRedirect(result));
 			} else if ('failed' === outcome) {
 				stopAutoPoll(root);
 				setStatus(root, t('failed', 'Payment failed. You can try again.'), 'error');
@@ -328,26 +397,34 @@
 	}
 
 	function resetToIdle(root) {
+		setBusy(root, false);
+		setSelectDisabled(root, false);
 		setButtonDisabled(root, '.mtfwc-start-payment', false);
 		setButtonDisabled(root, '.mtfwc-poll-payment', false);
 		setButtonDisabled(root, '.mtfwc-cancel-payment', false);
 	}
 
-	// Payment succeeded: finish the order the same way the POS "Process payment"
-	// button does — submit the order-pay form (#place_order). Fall back to the
-	// POS postMessage bridge when the button is not in this document.
-	function completeOrder(root) {
+	// Payment succeeded. The order is already reconciled and paid server-side,
+	// so re-submitting the order-pay form would only hit WooCommerce's
+	// "already paid" guard — navigate straight to the thank-you page instead
+	// (a POS-aware URL supplied by the server, like Stripe/SumUp do). The
+	// form-submit chain remains as a fallback when no redirect URL is known.
+	function completeOrder(root, redirectUrl) {
 		stopAutoPoll(root);
 		setStatus(root, t('completing', 'Payment complete — finishing order…'), 'success');
-		appendLog(root, 'success', 'Terminal payment complete; submitting order.');
+		appendLog(root, 'success', 'Terminal payment complete; finishing order.', { redirect: !!redirectUrl });
 		if (root.mtfwcCompleted) {
 			return;
 		}
 		root.mtfwcCompleted = true;
-		// Re-enable the controls so the UI is not stuck if submitting the order
-		// does not navigate away (e.g. the button is not in this document).
+		// Re-enable the controls so the UI is not stuck if finishing the order
+		// does not navigate away.
 		resetToIdle(root);
 
+		if (redirectUrl && window.location) {
+			window.location.href = redirectUrl;
+			return;
+		}
 		var placeOrder = ('function' === typeof document.getElementById) ? document.getElementById('place_order') : null;
 		if (placeOrder && 'function' === typeof placeOrder.click) {
 			placeOrder.click();
@@ -380,6 +457,8 @@
 		root.setAttribute('data-mtfwc-request-pending', 'true');
 		stopAutoPoll(root);
 		setActionButtonsDisabled(root, true);
+		setSelectDisabled(root, true);
+		setBusy(root, true);
 		setStatus(root, t('sending', 'Sending to terminal…'), 'info');
 		postAction(root, 'mtfwc_start_payment', { terminal_id: terminalId }).then(function (result) {
 			root.setAttribute('data-mtfwc-request-pending', 'false');
@@ -390,7 +469,7 @@
 			}
 			var outcome = classify(resultStatus(result));
 			if ('paid' === outcome) {
-				completeOrder(root);
+				completeOrder(root, resultRedirect(result));
 			} else if ('failed' === outcome) {
 				setStatus(root, t('failed', 'Payment failed. You can try again.'), 'error');
 				resetToIdle(root);
@@ -409,6 +488,7 @@
 		root.setAttribute('data-mtfwc-request-pending', 'true');
 		stopAutoPoll(root);
 		setActionButtonsDisabled(root, true);
+		setBusy(root, true);
 		setStatus(root, t('contacting', 'Contacting Mollie Terminal…'), 'info');
 		postAction(root, 'mtfwc_cancel_payment').then(function (result) {
 			root.setAttribute('data-mtfwc-request-pending', 'false');
@@ -429,7 +509,7 @@
 			}
 			var outcome = classify(status);
 			if ('paid' === outcome) {
-				completeOrder(root);
+				completeOrder(root, resultRedirect(result));
 			} else if ('failed' === outcome) {
 				setStatus(root, t('canceled', 'Payment canceled.'), 'info');
 				resetToIdle(root);
@@ -457,7 +537,7 @@
 			var status = resultStatus(result);
 			setStatus(root, 'Mollie Terminal status: ' + (status || 'ok'), 'info');
 			if ('paid' === classify(status)) {
-				completeOrder(root);
+				completeOrder(root, resultRedirect(result));
 			}
 		});
 	}
@@ -468,6 +548,10 @@
 		var select = root.querySelector('.mtfwc-terminal-select');
 		var ctx = orderContext(root);
 		if (!select || !ctx.orderId || ctx.orderId === '0') {
+			return;
+		}
+		if (isLocked(root)) {
+			// Selection is locked to the default terminal; nothing to fetch.
 			return;
 		}
 		postAction(root, 'mtfwc_list_terminals').then(function (result) {
@@ -492,6 +576,7 @@
 		if (!terminals.length) {
 			select.appendChild(createOption('', t('noTerminals', 'No terminals found on this Mollie account.')));
 			select.disabled = true;
+			select.setAttribute('data-mtfwc-unavailable', '1');
 			select.setAttribute('aria-busy', 'false');
 			appendLog(root, 'warning', t('noTerminals', 'No terminals found on this Mollie account.'));
 			return;
@@ -533,6 +618,35 @@
 	}
 
 	// --- Binding --------------------------------------------------------------
+
+	// Best-effort cancel when the page is closed while a payment is still in
+	// flight (e.g. the POS checkout modal is dismissed): a beacon fires the
+	// cancel action so the payment does not linger open on the Mollie side.
+	// If the payment already reached the terminal or was paid, the server
+	// treats the cancel as a no-op, and the successful-payment redirect never
+	// triggers this (the poll session is stopped and the panel marked complete
+	// before navigating).
+	function bindCancelOnLeave(root) {
+		if ('function' !== typeof window.addEventListener || !window.navigator || 'function' !== typeof window.navigator.sendBeacon) {
+			return;
+		}
+		window.addEventListener('pagehide', function () {
+			if (!root.mtfwcPoll || root.mtfwcCompleted) {
+				return;
+			}
+			var ctx = orderContext(root);
+			if (!ctx.orderId || ctx.orderId === '0') {
+				return;
+			}
+			var body = new FormData();
+			body.append('action', 'mtfwc_cancel_payment');
+			body.append('order_id', ctx.orderId);
+			body.append('order_token', ctx.orderToken);
+			try {
+				window.navigator.sendBeacon(getData().ajaxUrl, body);
+			} catch (e) {}
+		});
+	}
 
 	function bindClick(root, selector, handler) {
 		var button = root.querySelector(selector);
@@ -595,6 +709,7 @@
 		bindClick(root, '.mtfwc-start-payment', onStart);
 		bindClick(root, '.mtfwc-poll-payment', onManualPoll);
 		bindClick(root, '.mtfwc-cancel-payment', onCancel);
+		bindCancelOnLeave(root);
 		loadTerminals(root);
 	}
 

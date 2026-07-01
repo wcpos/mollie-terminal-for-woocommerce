@@ -18,6 +18,10 @@ class TerminalService {
 	public function create_pairing_code( string $name ): array { return $this->client->create_terminal_pairing_code( $this->settings->profile_id(), $name ); }
 	public function validate_terminal( string $terminal_id ): array {
 		if ( '' === $terminal_id ) { throw new RuntimeException( 'Terminal ID is required.' ); }
+		$enabled = $this->settings->enabled_terminal_ids();
+		if ( $enabled && ! in_array( $terminal_id, $enabled, true ) ) {
+			throw new RuntimeException( 'Selected terminal is not enabled for checkout.' );
+		}
 		$terminal = $this->client->get_terminal( $terminal_id );
 		$status = strtolower( (string) ( $terminal['status'] ?? $terminal['mode'] ?? '' ) );
 		if ( isset( $terminal['mode'] ) && $terminal['mode'] !== $this->settings->mode() ) {

@@ -16,7 +16,18 @@ class AjaxHandler {
 		add_action( 'wp_ajax_mtfwc_pair_terminal', array( $this, 'mtfwc_pair_terminal' ) );
 	}
 
-	public function mtfwc_start_payment(): void { $this->with_order( 'start_payment', function ( $order ) { return $this->payment_service()->start_payment_for_order( $order, sanitize_text_field( wp_unslash( $_POST['terminal_id'] ?? '' ) ) ); } ); }
+	public function mtfwc_start_payment(): void {
+		$this->with_order( 'start_payment', function ( $order ) {
+			$terminal_id = sanitize_text_field( wp_unslash( $_POST['terminal_id'] ?? '' ) );
+			$settings    = $this->settings();
+			if ( $settings->lock_terminal() ) {
+				// Terminal selection is locked: always use the configured default,
+				// regardless of what the client submitted.
+				$terminal_id = $settings->default_terminal_id();
+			}
+			return $this->payment_service()->start_payment_for_order( $order, $terminal_id );
+		} );
+	}
 	public function mtfwc_poll_payment(): void { $this->with_order( 'poll_payment', function ( $order ) { return $this->payment_service()->poll_order( $order ); } ); }
 	public function mtfwc_cancel_payment(): void { $this->with_order( 'cancel_payment', function ( $order ) { return $this->payment_service()->cancel_order_payment( $order ); } ); }
 
@@ -26,10 +37,11 @@ class AjaxHandler {
 			wp_send_json_error( __( 'Unauthorized request.', 'mollie-terminal-for-woocommerce' ), 403 );
 		}
 		try {
-			$default = $this->settings()->default_terminal_id();
-			$items   = self::normalize_terminals( $this->terminal_service()->list_terminals() );
+			$settings = $this->settings();
+			$default  = $settings->default_terminal_id();
+			$items    = self::selectable_terminals( self::normalize_terminals( $this->terminal_service()->list_terminals() ), $settings->enabled_terminal_ids() );
 			Diagnostics::record( 'info', 'Mollie Terminal list retrieved.', array( 'order_id' => $order_id, 'count' => count( $items ) ) );
-			wp_send_json_success( array( 'terminals' => $items, 'default_terminal_id' => $default ) );
+			wp_send_json_success( array( 'terminals' => $items, 'default_terminal_id' => $default, 'lock_terminal' => $settings->lock_terminal() ) );
 		} catch ( Exception $e ) {
 			Diagnostics::record( 'error', 'Mollie Terminal list failed: ' . $e->getMessage(), array( 'order_id' => $order_id ) );
 			wp_send_json_error( $e->getMessage(), 500 );
@@ -50,6 +62,40 @@ class AjaxHandler {
 			);
 		}
 		return $items;
+	}
+
+	/**
+	 * Filter normalized terminals down to the ones a cashier may select:
+	 * inactive/disabled terminals are dropped (Mollie cannot reactivate them,
+	 * so they serve no purpose), and when the merchant configured an
+	 * enabled-terminals allowlist only those are kept.
+	 */
+	public static function selectable_terminals( array $terminals, array $enabled_ids = array() ): array {
+		$items = array();
+		foreach ( $terminals as $terminal ) {
+			$status = strtolower( (string) ( $terminal['status'] ?? '' ) );
+			if ( in_array( $status, array( 'inactive', 'disabled' ), true ) ) { continue; }
+			if ( $enabled_ids && ! in_array( (string) ( $terminal['id'] ?? '' ), $enabled_ids, true ) ) { continue; }
+			$items[] = $terminal;
+		}
+		return $items;
+	}
+
+	/**
+	 * Thank-you URL for a paid order. Inside the WooCommerce POS the standard
+	 * order-received page is not what the POS watches for, so POS requests
+	 * (detected via the X-WCPOS header the frontend sends) get the
+	 * /wcpos-checkout/order-received/ variant instead — the same URL the
+	 * Stripe/SumUp terminal gateways redirect to.
+	 */
+	public static function order_return_url( $order ): string {
+		if ( function_exists( 'woocommerce_pos_request' ) && woocommerce_pos_request() ) {
+			return add_query_arg(
+				array( 'key' => $order->get_order_key() ),
+				get_home_url( null, '/wcpos-checkout/order-received/' . $order->get_id() )
+			);
+		}
+		return (string) $order->get_checkout_order_received_url();
 	}
 
 	public function mtfwc_pair_terminal(): void {
@@ -76,6 +122,12 @@ class AjaxHandler {
 				wp_send_json_error( __( 'Invalid order.', 'mollie-terminal-for-woocommerce' ), 404 );
 			}
 			$result = $callback( $order );
+			if ( is_array( $result ) && $order->is_paid() ) {
+				// The order is already reconciled and paid, so re-submitting the
+				// order-pay form would hit WooCommerce's "already paid" guard.
+				// Hand the frontend the thank-you URL to navigate to directly.
+				$result['redirect_url'] = self::order_return_url( $order );
+			}
 			Diagnostics::record( 'success', 'Mollie Terminal AJAX request completed.', array( 'operation' => $operation, 'order_id' => $order_id, 'status' => is_array( $result ) ? ( $result['status'] ?? '' ) : '' ) );
 			wp_send_json_success( $result );
 		} catch ( Exception $e ) {
