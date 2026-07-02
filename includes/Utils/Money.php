@@ -51,7 +51,7 @@ class Money {
 
 	private static function minor_units( string $amount ): int {
 		$amount = trim( $amount );
-		$negative = str_starts_with( $amount, '-' );
+		$negative = isset( $amount[0] ) && '-' === $amount[0];
 		$amount = ltrim( $amount, '+-' );
 		$parts = explode( '.', $amount, 2 );
 		$whole = preg_replace( '/\D/', '', $parts[0] ?: '0' );

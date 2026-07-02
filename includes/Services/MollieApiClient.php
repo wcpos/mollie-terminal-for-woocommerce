@@ -8,8 +8,12 @@ use WCPOS\WooCommercePOS\MollieTerminal\Logger;
 class MollieApiClient {
 	private const BASE_URL = 'https://api.mollie.com/v2';
 	private $api_key;
+	private $default_timeout;
 
-	public function __construct( string $api_key ) { $this->api_key = $api_key; }
+	public function __construct( string $api_key, int $default_timeout = 0 ) {
+		$this->api_key         = $api_key;
+		$this->default_timeout = $default_timeout;
+	}
 	public function has_api_key(): bool { return '' !== trim( $this->api_key ); }
 
 	public function get_profile( string $profile_id = 'me' ): array { return $this->request( 'GET', '/profiles/' . rawurlencode( $profile_id ) ); }
@@ -27,6 +31,7 @@ class MollieApiClient {
 			Diagnostics::record_api_error( 'Mollie API key is missing.', array( 'method' => $method, 'path' => $path ) );
 			throw new RuntimeException( 'Mollie API key is missing.' );
 		}
+		if ( $timeout <= 0 ) { $timeout = $this->default_timeout; }
 		$args = array(
 			'method' => $method,
 			'timeout' => $timeout > 0 ? $timeout : 30,

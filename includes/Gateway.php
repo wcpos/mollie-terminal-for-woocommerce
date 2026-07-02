@@ -33,6 +33,18 @@ class Gateway extends WC_Payment_Gateway {
 			'api_key' => array( 'title' => __( 'Mollie API Key', 'mollie-terminal-for-woocommerce' ), 'type' => 'password', 'default' => '', 'description' => __( 'Use your live API key. Mollie terminals are only available on live accounts; the test API key cannot drive a physical terminal.', 'mollie-terminal-for-woocommerce' ) ),
 			'default_terminal_id' => $this->default_terminal_field(),
 		);
+		$enabled_terminals_field = $this->enabled_terminals_field();
+		if ( null !== $enabled_terminals_field ) {
+			$this->form_fields['enabled_terminals'] = $enabled_terminals_field;
+		}
+		$this->form_fields['lock_terminal'] = array(
+			'title'       => __( 'Lock terminal selection', 'mollie-terminal-for-woocommerce' ),
+			'type'        => 'checkbox',
+			'label'       => __( 'Cashiers cannot change the terminal at checkout — the default terminal is always used.', 'mollie-terminal-for-woocommerce' ),
+			'description' => __( 'Requires a default terminal to be selected.', 'mollie-terminal-for-woocommerce' ),
+			'desc_tip'    => true,
+			'default'     => 'no',
+		);
 	}
 
 	/**
@@ -44,7 +56,7 @@ class Gateway extends WC_Payment_Gateway {
 	private function default_terminal_field(): array {
 		$base = array(
 			'title'       => __( 'Default terminal', 'mollie-terminal-for-woocommerce' ),
-			'description' => __( 'Terminal used by default at checkout. Cashiers can still pick another terminal per order. Fetched live from your Mollie account.', 'mollie-terminal-for-woocommerce' ),
+			'description' => __( 'Terminal used by default at checkout. Fetched live from your Mollie account (inactive terminals are hidden).', 'mollie-terminal-for-woocommerce' ),
 			'desc_tip'    => true,
 			'default'     => '',
 		);
@@ -52,15 +64,44 @@ class Gateway extends WC_Payment_Gateway {
 		if ( null === $options ) {
 			return array_merge( $base, array( 'type' => 'text' ) );
 		}
-		return array_merge( $base, array( 'type' => 'select', 'options' => $options ) );
+		return array_merge(
+			$base,
+			array( 'type' => 'select', 'options' => array( '' => __( '— Select a terminal —', 'mollie-terminal-for-woocommerce' ) ) + $options )
+		);
 	}
 
 	/**
-	 * Fetch terminals as id => label options for the settings dropdown.
-	 * Returns null (caller falls back to a text field) when we should not or
-	 * cannot fetch: not on this settings screen, no API key, or an API error.
+	 * Build the "Enabled terminals" multiselect. Omitted entirely when the
+	 * terminal list cannot be fetched — WooCommerce then leaves the saved
+	 * value untouched, so a temporary API failure never wipes the setting.
 	 */
+	private function enabled_terminals_field(): ?array {
+		$options = $this->fetch_terminal_options();
+		if ( null === $options ) {
+			return null;
+		}
+		return array(
+			'title'       => __( 'Enabled terminals', 'mollie-terminal-for-woocommerce' ),
+			'type'        => 'multiselect',
+			'class'       => 'wc-enhanced-select',
+			'options'     => $options,
+			'default'     => array(),
+			'description' => __( 'Only the selected terminals can be chosen at checkout. Leave empty to allow all active terminals.', 'mollie-terminal-for-woocommerce' ),
+			'desc_tip'    => true,
+		);
+	}
+
+	/**
+	 * Fetch selectable terminals as an id => label map for the settings fields.
+	 * Inactive terminals are excluded — Mollie cannot reactivate them, so they
+	 * have no purpose in any dropdown. Returns null (callers fall back) when we
+	 * should not or cannot fetch: not on this settings screen, no API key, or
+	 * an API error. Result is memoized per request and cached in a transient.
+	 */
+	private $terminal_options_cache = false;
 	private function fetch_terminal_options(): ?array {
+		if ( false !== $this->terminal_options_cache ) { return $this->terminal_options_cache; }
+		$this->terminal_options_cache = null;
 		if ( ! function_exists( 'is_admin' ) || ! is_admin() ) { return null; }
 		if ( function_exists( 'wp_doing_ajax' ) && wp_doing_ajax() ) { return null; }
 		$section = isset( $_GET['section'] ) ? sanitize_text_field( wp_unslash( $_GET['section'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
@@ -70,19 +111,23 @@ class Gateway extends WC_Payment_Gateway {
 		// Cache the fetched list so repeated settings-page renders don't each make
 		// an HTTP call, and use a short timeout so a cache miss during a Mollie
 		// outage fails fast to the text-field fallback instead of hanging admin.
-		$cache_key = 'mtfwc_terminal_options_' . $settings->mode();
+		$cache_key = 'mtfwc_terminal_choices_' . $settings->mode();
 		$cached = get_transient( $cache_key );
-		if ( is_array( $cached ) ) { return $cached; }
+		if ( is_array( $cached ) ) {
+			$this->terminal_options_cache = $cached;
+			return $cached;
+		}
 		try {
 			$terminals = ( new TerminalService( new MollieApiClient( $settings->api_key() ), $settings ) )->list_terminals( 8 );
 		} catch ( \Exception $e ) {
 			return null;
 		}
-		$options = array( '' => __( '— Select a terminal —', 'mollie-terminal-for-woocommerce' ) );
-		foreach ( AjaxHandler::normalize_terminals( $terminals ) as $terminal ) {
+		$options = array();
+		foreach ( AjaxHandler::selectable_terminals( AjaxHandler::normalize_terminals( $terminals ) ) as $terminal ) {
 			$options[ $terminal['id'] ] = sprintf( '%s (%s)', $terminal['label'], $terminal['id'] );
 		}
 		set_transient( $cache_key, $options, 5 * MINUTE_IN_SECONDS );
+		$this->terminal_options_cache = $options;
 		return $options;
 	}
 
@@ -124,21 +169,30 @@ class Gateway extends WC_Payment_Gateway {
 			}
 		}
 
-		echo '<div id="mtfwc-payment-interface" class="mtfwc-payment-interface" data-order-id="' . esc_attr( $order_id ) . '" data-order-token="' . esc_attr( $order_token ) . '" data-default-terminal-id="' . esc_attr( $settings->default_terminal_id() ) . '">';
+		$is_pos = function_exists( 'woocommerce_pos_request' ) && woocommerce_pos_request();
+		$locked = $settings->lock_terminal();
+		echo '<div id="mtfwc-payment-interface" class="mtfwc-payment-interface" data-order-id="' . esc_attr( $order_id ) . '" data-order-token="' . esc_attr( $order_token ) . '" data-default-terminal-id="' . esc_attr( $settings->default_terminal_id() ) . '" data-pos="' . ( $is_pos ? '1' : '0' ) . '" data-lock-terminal="' . ( $locked ? '1' : '0' ) . '">';
 		echo '<div class="mtfwc-payment-card">';
 		echo '<h4>' . esc_html__( 'Mollie Terminal', 'mollie-terminal-for-woocommerce' ) . '</h4>';
 		if ( $order_id ) {
 			echo '<p class="mtfwc-payment-help">' . esc_html__( 'Send this order to a Mollie terminal. The payment completes automatically once the terminal confirms.', 'mollie-terminal-for-woocommerce' ) . '</p>';
+			$default_terminal = $settings->default_terminal_id();
 			echo '<div class="mtfwc-terminal-field">';
 			echo '<label class="mtfwc-terminal-label" for="mtfwc-terminal-select">' . esc_html__( 'Terminal', 'mollie-terminal-for-woocommerce' ) . '</label>';
-			echo '<select id="mtfwc-terminal-select" class="mtfwc-terminal-select" disabled aria-busy="true">';
-			$default_terminal = $settings->default_terminal_id();
-			if ( '' !== $default_terminal ) {
+			if ( $locked ) {
+				// Selection is locked to the default terminal; no list is fetched.
+				echo '<select id="mtfwc-terminal-select" class="mtfwc-terminal-select" disabled>';
 				echo '<option value="' . esc_attr( $default_terminal ) . '" selected>' . esc_html( $default_terminal ) . '</option>';
+				echo '</select>';
 			} else {
-				echo '<option value="">' . esc_html__( 'Loading terminals…', 'mollie-terminal-for-woocommerce' ) . '</option>';
+				echo '<select id="mtfwc-terminal-select" class="mtfwc-terminal-select" disabled aria-busy="true">';
+				if ( '' !== $default_terminal ) {
+					echo '<option value="' . esc_attr( $default_terminal ) . '" selected>' . esc_html( $default_terminal ) . '</option>';
+				} else {
+					echo '<option value="">' . esc_html__( 'Loading terminals…', 'mollie-terminal-for-woocommerce' ) . '</option>';
+				}
+				echo '</select>';
 			}
-			echo '</select>';
 			echo '</div>';
 			echo '<div class="mtfwc-payment-actions">';
 			echo '<button type="button" class="button button-primary mtfwc-start-payment" data-order-id="' . esc_attr( $order_id ) . '" data-order-token="' . esc_attr( $order_token ) . '">' . esc_html__( 'Start Terminal Payment', 'mollie-terminal-for-woocommerce' ) . '</button>';
@@ -170,6 +224,9 @@ class Gateway extends WC_Payment_Gateway {
 	}
 
 	public function clear_terminal_cache(): void {
+		delete_transient( 'mtfwc_terminal_choices_test' );
+		delete_transient( 'mtfwc_terminal_choices_live' );
+		// Pre-0.3.0 cache keys.
 		delete_transient( 'mtfwc_terminal_options_test' );
 		delete_transient( 'mtfwc_terminal_options_live' );
 	}
@@ -198,6 +255,7 @@ class Gateway extends WC_Payment_Gateway {
 					'failed' => __( 'Payment failed. You can try again.', 'mollie-terminal-for-woocommerce' ),
 					'canceled' => __( 'Payment canceled.', 'mollie-terminal-for-woocommerce' ),
 					'timedOut' => __( 'Timed out waiting for the terminal. Check the terminal or try again.', 'mollie-terminal-for-woocommerce' ),
+					'timedOutCanceling' => __( 'Timed out waiting for the terminal — canceling the payment…', 'mollie-terminal-for-woocommerce' ),
 					'notCancelable' => __( 'This payment can no longer be canceled.', 'mollie-terminal-for-woocommerce' ),
 					'contacting' => __( 'Contacting Mollie Terminal…', 'mollie-terminal-for-woocommerce' ),
 					'checkFailed' => __( 'Status check failed. Copy logs for support.', 'mollie-terminal-for-woocommerce' ),
@@ -238,7 +296,7 @@ class Gateway extends WC_Payment_Gateway {
 			}
 		}
 		if ( $order->is_paid() ) {
-			return array( 'result' => 'success', 'redirect' => $this->get_return_url( $order ) );
+			return array( 'result' => 'success', 'redirect' => AjaxHandler::order_return_url( $order ) );
 		}
 		wc_add_notice( __( 'No completed Mollie Terminal payment was found for this order yet. Complete the payment on the terminal and try again.', 'mollie-terminal-for-woocommerce' ), 'error' );
 		return array( 'result' => 'failure' );

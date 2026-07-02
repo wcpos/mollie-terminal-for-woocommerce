@@ -33,6 +33,7 @@ class FakeElement {
 	// throws in strict mode, exactly as a browser would (regression guard).
 	get options() { return makeNodeList(this.children.filter((c) => 'option' === c.tagName)); }
 	setAttribute(name, value) { this.attributes[name] = String(value); }
+	removeAttribute(name) { delete this.attributes[name]; }
 	getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null; }
 	addEventListener(type, callback) { (this.listeners[type] = this.listeners[type] || []).push(callback); }
 	click() { this.clickCount++; (this.listeners.click || []).forEach((callback) => callback({ target: this, preventDefault() {} })); }
@@ -59,11 +60,12 @@ function makeButton(className, label) {
 	return button;
 }
 
-function makePanel(orderId) {
+function makePanel(orderId, attrs = {}) {
 	const root = new FakeElement(['mtfwc-payment-interface']);
 	root.setAttribute('data-order-id', orderId);
 	root.setAttribute('data-order-token', 'token-' + orderId);
 	root.setAttribute('data-default-terminal-id', 'term_default');
+	Object.keys(attrs).forEach((name) => root.setAttribute(name, attrs[name]));
 	root.append(makeButton('mtfwc-toggle-log', 'Show logs')).setAttribute('data-expanded', 'false');
 	root.append(makeButton('mtfwc-clear-log', 'Clear logs'));
 	root.append(makeButton('mtfwc-copy-log', 'Copy logs'));
@@ -85,11 +87,13 @@ async function flush() {
 }
 
 (async () => {
-	const panel = makePanel('123');
+	const panel = makePanel('123', { 'data-pos': '1' });
 	const panels = [panel];
 	const fetchCalls = [];
 	const pendingFetches = [];
 	const jqueryHandlers = {};
+	const windowListeners = {};
+	const beacons = [];
 	const nativeBody = new FakeElement([]);
 	const storage = {};
 	const placeOrderButton = new FakeElement([]);
@@ -137,9 +141,13 @@ async function flush() {
 			pollTimeoutMs: 300000,
 			i18n: { logsHidden: 'Show logs', logsShown: 'Hide logs', copied: 'Copied', copyFailed: 'Copy failed' },
 		},
+		location: { href: 'https://example.test/wcpos-checkout/order-pay/123/' },
+		addEventListener(type, callback) { (windowListeners[type] = windowListeners[type] || []).push(callback); },
+		navigator: { sendBeacon(url, body) { beacons.push({ url, body }); return true; } },
 		jQuery(target) { return { on(event, callback) { jqueryHandlers[event] = callback; } }; },
 	};
 	context.jQuery = context.window.jQuery;
+	function firePagehide() { (windowListeners.pagehide || []).forEach((callback) => callback()); }
 
 	function lastAction() {
 		const call = fetchCalls[fetchCalls.length - 1];
@@ -178,6 +186,8 @@ async function flush() {
 	// On bind the panel fetches the terminal list to populate the dropdown.
 	assert.strictEqual(fetchCalls.length, 1, 'binding a panel should request the terminal list');
 	assert.strictEqual(lastAction(), 'mtfwc_list_terminals', 'first request should be mtfwc_list_terminals');
+	// POS panels identify themselves so the server can build the POS thank-you URL.
+	assert.strictEqual(fetchCalls[0].options.headers['X-WCPOS'], '1', 'POS panels should send the X-WCPOS header');
 	await resolveNext({
 		terminals: [
 			{ id: 'term_A', label: 'Front desk', status: 'active' },
@@ -187,6 +197,7 @@ async function flush() {
 	});
 	assert.strictEqual(select.value, 'term_default', 'the configured default terminal should be preselected');
 	assert.strictEqual(select.options.length, 2, 'the dropdown should list the fetched terminals');
+	assert.strictEqual(select.getAttribute('data-mtfwc-unavailable'), null, 'a populated dropdown must not carry the unavailable marker');
 
 	// Duplicate Start clicks should be ignored while the request is pending.
 	start.click();
@@ -222,15 +233,21 @@ async function flush() {
 	}
 	assert(textarea.value.split('\n').length <= 50, 'browser logs should keep a bounded number of lines');
 
-	// Next scheduled poll returns paid -> the order is completed by clicking #place_order.
+	// Next scheduled poll returns paid with a redirect URL -> navigate straight
+	// to the thank-you page (the order is already paid server-side; submitting
+	// the order-pay form would hit WooCommerce's "already paid" guard).
+	const thankYouUrl = 'https://example.test/wcpos-checkout/order-received/123?key=wc_order_test';
 	await fireTimers();
-	await resolveNext({ status: 'paid' });
-	assert.strictEqual(placeOrderButton.clickCount, 1, 'a paid poll should complete the order via #place_order');
+	await resolveNext({ status: 'paid', redirect_url: thankYouUrl });
+	assert.strictEqual(context.window.location.href, thankYouUrl, 'a paid poll should redirect to the thank-you page');
+	assert.strictEqual(placeOrderButton.clickCount, 0, 'the order-pay form must not be re-submitted when a redirect URL is available');
 
-	// A second paid signal must not double-submit the order.
+	// A second paid signal must not double-complete the order.
+	context.window.location.href = 'sentinel';
 	poll.click();
-	await resolveNext({ status: 'paid' });
-	assert.strictEqual(placeOrderButton.clickCount, 1, 'order completion should be idempotent');
+	await resolveNext({ status: 'paid', redirect_url: thankYouUrl });
+	assert.strictEqual(context.window.location.href, 'sentinel', 'order completion should be idempotent');
+	assert.strictEqual(placeOrderButton.clickCount, 0, 'idempotent completion should not fall back to #place_order');
 
 	// A failed cancel request must surface an error, not silently reset with a stale status.
 	cancel.click();
@@ -247,6 +264,73 @@ async function flush() {
 	jqueryHandlers.updated_checkout();
 	refreshedPanel.querySelector('.mtfwc-toggle-log').click();
 	assert.strictEqual(refreshedPanel.querySelector('.mtfwc-toggle-log').getAttribute('data-expanded'), 'true', 'checkout refresh binding should attach handlers once to new panels');
+
+	// Resolve the refreshed panel's terminal-list fetch.
+	await resolveNext({
+		terminals: [{ id: 'term_default', label: 'Back office', status: 'active' }],
+		default_terminal_id: 'term_default',
+	});
+
+	// Without a redirect URL the completion falls back to submitting #place_order.
+	refreshedPanel.querySelector('.mtfwc-poll-payment').click();
+	await resolveNext({ status: 'paid' });
+	assert.strictEqual(placeOrderButton.clickCount, 1, 'completion falls back to #place_order when no redirect URL is provided');
+
+	// A timed-out auto-poll sends a cancel to Mollie instead of leaving the payment open.
+	const start456 = refreshedPanel.querySelector('.mtfwc-start-payment');
+	start456.click();
+	await resolveNext({ status: 'created' });
+	assert(refreshedPanel.mtfwcPoll, 'auto-poll should be armed after a successful start');
+	refreshedPanel.mtfwcPoll.deadline = 0; // force the timeout branch on the next tick
+	await fireTimers();
+	assert.strictEqual(lastAction(), 'mtfwc_cancel_payment', 'a timed-out auto-poll should auto-cancel the payment');
+	await resolveNext({ status: 'canceled' });
+	assert(/timed out/i.test(refreshedPanel.querySelector('.mtfwc-payment-status').textContent), 'the timeout message should be shown after auto-cancel');
+	assert.strictEqual(start456.disabled, false, 'Start re-enables after a timed-out payment is canceled');
+
+	// A retry started while the timeout-cancel is still in flight must not have
+	// its UI clobbered by the stale cancel response.
+	start456.click();
+	await resolveNext({ status: 'created' });
+	refreshedPanel.mtfwcPoll.deadline = 0;
+	await fireTimers(); // timeout branch fires the cancel (request now pending)
+	start456.click(); // cashier retries immediately; start request queues behind the cancel
+	await resolveNext({ status: 'canceled' }); // stale cancel response arrives first
+	assert(/sending/i.test(refreshedPanel.querySelector('.mtfwc-payment-status').textContent), 'a stale timeout-cancel response must not clobber the new attempt');
+	await resolveNext({ status: 'created' }); // the retry's start response
+	assert(/waiting/i.test(refreshedPanel.querySelector('.mtfwc-payment-status').textContent), 'the retry should proceed to the waiting state');
+	// Wind the retry down so later pagehide assertions see no active poll here.
+	await fireTimers();
+	await resolveNext({ status: 'canceled' });
+
+	// Locked panels never fetch the terminal list and always use the default terminal.
+	const lockedPanel = makePanel('789', { 'data-lock-terminal': '1' });
+	panels.push(lockedPanel);
+	const fetchCountBefore = fetchCalls.length;
+	jqueryHandlers.updated_checkout();
+	assert.strictEqual(fetchCalls.length, fetchCountBefore, 'locked panels must not fetch the terminal list');
+	lockedPanel.querySelector('.mtfwc-start-payment').click();
+	assert.strictEqual(lastAction(), 'mtfwc_start_payment', 'locked panel Start should fire');
+	assert.strictEqual(fetchCalls[fetchCalls.length - 1].options.body.fields.terminal_id, 'term_default', 'locked panels always send the default terminal');
+	await resolveNext({ status: 'created' });
+
+	// An empty terminal list disables the select and marks it unavailable, so
+	// resetToIdle() leaves it disabled (the non-empty path clears the marker,
+	// asserted on the populated panel above).
+	const emptyPanel = makePanel('999');
+	panels.push(emptyPanel);
+	jqueryHandlers.updated_checkout();
+	const emptySelect = emptyPanel.querySelector('.mtfwc-terminal-select');
+	await resolveNext({ terminals: [], default_terminal_id: '' });
+	assert.strictEqual(emptySelect.disabled, true, 'an empty terminal list should disable the select');
+	assert.strictEqual(emptySelect.getAttribute('data-mtfwc-unavailable'), '1', 'an empty terminal list should mark the select unavailable');
+
+	// Closing the page while a payment is in flight fires one best-effort cancel
+	// beacon (completed/idle panels stay silent).
+	firePagehide();
+	assert.strictEqual(beacons.length, 1, 'exactly one cancel beacon should fire for the in-flight payment');
+	assert.strictEqual(beacons[0].body.fields.action, 'mtfwc_cancel_payment', 'the beacon should cancel the payment');
+	assert.strictEqual(beacons[0].body.fields.order_id, '789', 'the beacon should target the in-flight order');
 
 	console.log('payment-js ok');
 })().catch((error) => {
