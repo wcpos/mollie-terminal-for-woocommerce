@@ -134,7 +134,7 @@ class Gateway extends WC_Payment_Gateway {
 	public function admin_options(): void {
 		parent::admin_options();
 		// Purge pre-0.3.1 diagnostic options now that logging goes to WC logs.
-		Diagnostics::cleanup_legacy_options();
+		$this->cleanup_legacy_diagnostic_options();
 		$settings = new Settings();
 		echo '<h2>' . esc_html__( 'Mollie Terminal Diagnostics', 'mollie-terminal-for-woocommerce' ) . '</h2>';
 		if ( 'live' !== $settings->mode() ) {
@@ -152,6 +152,16 @@ class Gateway extends WC_Payment_Gateway {
 		);
 		echo '</td></tr>';
 		echo '</tbody></table>';
+	}
+
+	/**
+	 * Delete the pre-0.3.1 diagnostic options (logging moved to WC status logs).
+	 * Kept out of Logger, which must never touch the options table.
+	 */
+	private function cleanup_legacy_diagnostic_options(): void {
+		foreach ( array( 'mtfwc_last_api_error', 'mtfwc_recent_diagnostic_events', 'mtfwc_last_webhook_event' ) as $option ) {
+			delete_option( $option );
+		}
 	}
 
 	public function payment_fields(): void {
@@ -295,7 +305,7 @@ class Gateway extends WC_Payment_Gateway {
 					}
 				}
 			} catch ( \Exception $e ) {
-				Diagnostics::record( 'error', 'Mollie Terminal process_payment could not verify payment: ' . $e->getMessage() );
+				Logger::log( 'Mollie Terminal process_payment could not verify payment: ' . $e->getMessage(), array(), 'error' );
 			}
 		}
 		if ( $order->is_paid() ) {

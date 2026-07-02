@@ -12,7 +12,7 @@ class NoopWooLoggerForCleanup { public function log( $level, $message, $context 
 function wc_get_logger() { return new NoopWooLoggerForCleanup(); }
 
 require_once __DIR__ . '/../../includes/Settings.php';
-require_once __DIR__ . '/../../includes/Diagnostics.php';
+require_once __DIR__ . '/../../includes/Logger.php';
 require_once __DIR__ . '/../../includes/PaymentAttempt.php';
 require_once __DIR__ . '/../../includes/Services/MollieApiClient.php';
 require_once __DIR__ . '/../../includes/Services/TerminalService.php';

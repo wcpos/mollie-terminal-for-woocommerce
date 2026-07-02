@@ -29,7 +29,7 @@ class JsonResponseForAjaxDiagnostics extends Error {
 function wp_send_json_error( $data = null, $status_code = null ) { throw new JsonResponseForAjaxDiagnostics( $data, (int) $status_code ); }
 function wp_send_json_success( $data = null, $status_code = null ) { throw new JsonResponseForAjaxDiagnostics( $data, (int) $status_code ); }
 
-require_once __DIR__ . '/../../includes/Diagnostics.php';
+require_once __DIR__ . '/../../includes/Logger.php';
 require_once __DIR__ . '/../../includes/AjaxHandler.php';
 
 use WCPOS\WooCommercePOS\MollieTerminal\AjaxHandler;
