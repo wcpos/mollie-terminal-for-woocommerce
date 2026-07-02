@@ -7,6 +7,7 @@ All notable changes to Mollie Terminal for WooCommerce will be documented in thi
 ### Fixed
 
 - Successful terminal payments now redirect straight to the (POS-aware) thank-you page instead of re-submitting the order-pay form, which hit WooCommerce's "this order has already been paid" guard and left the POS checkout stuck in a loop.
+- The checkout terminal dropdown no longer stays stuck disabled when an initially empty terminal list later loads successfully.
 
 ### Added
 
@@ -15,8 +16,9 @@ All notable changes to Mollie Terminal for WooCommerce will be documented in thi
 - New "Lock terminal selection" setting: cashiers always use the default terminal (enforced server-side).
 - Stale-payment cleanup: auto-cancel the open Mollie payment when the auto-poll times out, when the order is paid another way (e.g. cash) or cancelled, and best-effort when the checkout page is closed mid-payment.
 - UI polish for the payment panel: status banner with busy spinner, clear button hierarchy, quieter logs section; terminal choice locks while a payment is in flight.
+- Hardened the payment panel CSS against theme/WooCommerce style leakage so store themes cannot distort the buttons, dropdown, or status banner.
 - CI workflow running lint and the regression suites on every pull request (PHP 7.4 + 8.3).
-- Dev-only UI preview harness (`tests/ui-preview/render.php`) to view the payment panel without a WordPress install.
+- Dev-only UI preview harness (`tests/ui-preview/render.php`), including a hostile-theme toggle and a server-rendered locked-terminal variant, to view the payment panel without a WordPress install.
 
 ## 0.2.0 - 2026-07-01
 
