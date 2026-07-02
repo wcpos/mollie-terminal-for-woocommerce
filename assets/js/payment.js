@@ -581,6 +581,9 @@
 			appendLog(root, 'warning', t('noTerminals', 'No terminals found on this Mollie account.'));
 			return;
 		}
+		// Terminals are available again — clear any stale "unavailable" marker so
+		// resetToIdle() can re-enable the select.
+		select.removeAttribute('data-mtfwc-unavailable');
 		// If the saved default is not in the list (paginated/removed/filtered),
 		// force an explicit choice rather than silently dispatching to the
 		// first terminal, which could be the wrong physical device.

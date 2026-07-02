@@ -6,3 +6,4 @@
 /worktrees/
 *.zip
 tests/ui-preview/index.html
+tests/ui-preview/index-locked.html

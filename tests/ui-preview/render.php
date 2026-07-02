@@ -7,8 +7,12 @@
  *
  * Usage:
  *   php tests/ui-preview/render.php > tests/ui-preview/index.html
+ *   MTFWC_PREVIEW_LOCK=1 php tests/ui-preview/render.php > tests/ui-preview/index-locked.html
  *   python3 -m http.server 8931   # from the repo root
  *   open http://localhost:8931/tests/ui-preview/index.html
+ *
+ * The page links between the unlocked and locked (Lock terminal selection)
+ * variants; both are generated files and are gitignored.
  */
 
 if ( ! defined( 'MTFWC_VERSION' ) ) { define( 'MTFWC_VERSION', 'preview' ); }
@@ -26,7 +30,18 @@ function absint( $value ) { return abs( (int) $value ); }
 function is_checkout_pay_page() { return true; }
 function wp_hash( $data ) { return hash( 'sha256', $data ); }
 function wp_salt( $scheme = '' ) { return 'preview-salt'; }
-function get_option( $key, $default = array() ) { return array( 'default_terminal_id' => 'term_event_stand', 'description' => 'Pay in person using Mollie Terminal.' ); }
+// This page is generated to a static .html file (see the usage note above), so
+// the locked variant is baked in at generation time via the env var rather than
+// a request-time query param.
+$preview_locked = ( isset( $_GET['lock'] ) && '1' === $_GET['lock'] ) || '1' === getenv( 'MTFWC_PREVIEW_LOCK' );
+function get_option( $key, $default = array() ) {
+	global $preview_locked;
+	return array(
+		'default_terminal_id' => 'term_event_stand',
+		'description'         => 'Pay in person using Mollie Terminal.',
+		'lock_terminal'       => $preview_locked ? 'yes' : 'no',
+	);
+}
 function admin_url( $path = '' ) { return 'mock-ajax'; }
 function add_query_arg( array $args, $url ) { return $url . '?' . http_build_query( $args ); }
 function woocommerce_pos_request( $type = 'all' ) { return true; }
@@ -142,6 +157,7 @@ $panel = ob_get_clean();
 	<button type="button" onclick="window.mtfwcMock.mode='pending'">polls stay pending</button>
 	<span>current: <code id="mock-mode">pending</code></span>
 	<label><input type="checkbox" checked onchange="document.getElementById('hostile-theme').disabled = !this.checked"> hostile theme CSS</label>
+	<a href="<?php echo $preview_locked ? 'index.html' : 'index-locked.html'; ?>" style="color:#93c5fd;"><?php echo $preview_locked ? '→ view unlocked' : '→ view locked (server-rendered)'; ?></a>
 </div>
 <script>
 	window.mtfwcPaymentData = {

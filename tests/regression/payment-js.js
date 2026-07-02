@@ -33,6 +33,7 @@ class FakeElement {
 	// throws in strict mode, exactly as a browser would (regression guard).
 	get options() { return makeNodeList(this.children.filter((c) => 'option' === c.tagName)); }
 	setAttribute(name, value) { this.attributes[name] = String(value); }
+	removeAttribute(name) { delete this.attributes[name]; }
 	getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null; }
 	addEventListener(type, callback) { (this.listeners[type] = this.listeners[type] || []).push(callback); }
 	click() { this.clickCount++; (this.listeners.click || []).forEach((callback) => callback({ target: this, preventDefault() {} })); }
@@ -196,6 +197,7 @@ async function flush() {
 	});
 	assert.strictEqual(select.value, 'term_default', 'the configured default terminal should be preselected');
 	assert.strictEqual(select.options.length, 2, 'the dropdown should list the fetched terminals');
+	assert.strictEqual(select.getAttribute('data-mtfwc-unavailable'), null, 'a populated dropdown must not carry the unavailable marker');
 
 	// Duplicate Start clicks should be ignored while the request is pending.
 	start.click();
@@ -311,6 +313,17 @@ async function flush() {
 	assert.strictEqual(lastAction(), 'mtfwc_start_payment', 'locked panel Start should fire');
 	assert.strictEqual(fetchCalls[fetchCalls.length - 1].options.body.fields.terminal_id, 'term_default', 'locked panels always send the default terminal');
 	await resolveNext({ status: 'created' });
+
+	// An empty terminal list disables the select and marks it unavailable, so
+	// resetToIdle() leaves it disabled (the non-empty path clears the marker,
+	// asserted on the populated panel above).
+	const emptyPanel = makePanel('999');
+	panels.push(emptyPanel);
+	jqueryHandlers.updated_checkout();
+	const emptySelect = emptyPanel.querySelector('.mtfwc-terminal-select');
+	await resolveNext({ terminals: [], default_terminal_id: '' });
+	assert.strictEqual(emptySelect.disabled, true, 'an empty terminal list should disable the select');
+	assert.strictEqual(emptySelect.getAttribute('data-mtfwc-unavailable'), '1', 'an empty terminal list should mark the select unavailable');
 
 	// Closing the page while a payment is in flight fires one best-effort cancel
 	// beacon (completed/idle panels stay silent).
