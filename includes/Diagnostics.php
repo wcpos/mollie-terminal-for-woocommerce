@@ -1,50 +1,60 @@
 <?php
 namespace WCPOS\WooCommercePOS\MollieTerminal;
 
+/**
+ * Records plugin diagnostics to the WooCommerce status logs
+ * (WooCommerce → Status → Logs, source "mollie-terminal-for-woocommerce").
+ *
+ * Nothing is written to the wp_options table. High-frequency AJAX/webhook
+ * logging into an option array caused option bloat and offered no atomic
+ * append guarantee under concurrent requests (issue #5). WC_Logger is the
+ * durable, concurrency-safe sink WooCommerce already provides.
+ */
 class Diagnostics {
-	public const OPTION_LAST_API_ERROR = 'mtfwc_last_api_error';
-	public const OPTION_RECENT_EVENTS = 'mtfwc_recent_diagnostic_events';
-	private const MAX_EVENTS = 50;
+	public const LOG_SOURCE = 'mollie-terminal-for-woocommerce';
+
+	/** Legacy option keys removed in favour of WC_Logger; cleaned up on demand. */
+	private const LEGACY_OPTIONS = array(
+		'mtfwc_last_api_error',
+		'mtfwc_recent_diagnostic_events',
+		'mtfwc_last_webhook_event',
+	);
 
 	public static function record( string $level, string $message, array $context = array() ): void {
-		if ( ! function_exists( 'get_option' ) || ! function_exists( 'update_option' ) ) {
+		$level   = self::normalize_level( $level );
+		$message = self::redact( $message );
+		$context = self::redact_context( $context );
+
+		$line = $message;
+		if ( ! empty( $context ) && function_exists( 'wp_json_encode' ) ) {
+			$line .= ' ' . wp_json_encode( $context );
+		}
+
+		if ( function_exists( 'wc_get_logger' ) ) {
+			wc_get_logger()->log( self::wc_level( $level ), $line, array( 'source' => self::LOG_SOURCE ) );
 			return;
 		}
-		$event = array(
-			'time' => gmdate( 'c' ),
-			'level' => self::normalize_level( $level ),
-			'message' => self::redact( $message ),
-			'context' => self::redact_context( $context ),
-		);
-		$events = self::recent_events();
-		$events[] = $event;
-		if ( count( $events ) > self::MAX_EVENTS ) {
-			$events = array_slice( $events, -self::MAX_EVENTS );
+		if ( function_exists( 'error_log' ) ) {
+			error_log( '[' . self::LOG_SOURCE . '] [' . $level . '] ' . $line ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 		}
-		update_option( self::OPTION_RECENT_EVENTS, $events, false );
 	}
 
 	public static function record_api_error( string $message, array $context = array() ): void {
-		if ( function_exists( 'update_option' ) ) {
-			update_option( self::OPTION_LAST_API_ERROR, self::redact( $message ), false );
-		}
 		self::record( 'error', $message, $context );
 	}
 
-	public static function last_api_error(): string {
-		if ( ! function_exists( 'get_option' ) ) {
-			return '';
+	/**
+	 * Delete the pre-0.3.1 diagnostic options. Idempotent; call from a
+	 * low-frequency context (e.g. the settings screen) so we do not run
+	 * delete queries on every request.
+	 */
+	public static function cleanup_legacy_options(): void {
+		if ( ! function_exists( 'delete_option' ) ) {
+			return;
 		}
-		$value = get_option( self::OPTION_LAST_API_ERROR, '' );
-		return is_string( $value ) ? $value : '';
-	}
-
-	public static function recent_events(): array {
-		if ( ! function_exists( 'get_option' ) ) {
-			return array();
+		foreach ( self::LEGACY_OPTIONS as $option ) {
+			delete_option( $option );
 		}
-		$events = get_option( self::OPTION_RECENT_EVENTS, array() );
-		return is_array( $events ) ? array_values( $events ) : array();
 	}
 
 	public static function redact( string $value ): string {
@@ -77,5 +87,10 @@ class Diagnostics {
 
 	private static function normalize_level( string $level ): string {
 		return in_array( $level, array( 'debug', 'info', 'success', 'warning', 'error' ), true ) ? $level : 'info';
+	}
+
+	/** Map internal levels onto WC_Logger / PSR-3 levels ("success" is ours). */
+	private static function wc_level( string $level ): string {
+		return 'success' === $level ? 'info' : $level;
 	}
 }

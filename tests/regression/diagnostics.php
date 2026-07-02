@@ -1,57 +1,57 @@
 <?php
 function expect( $condition, $message = 'expectation failed' ) { if ( ! $condition ) { fwrite( STDERR, $message . "\n" ); exit( 1 ); } }
 
-$options = array();
-function get_option( $key, $default = false ) { global $options; return array_key_exists( $key, $options ) ? $options[ $key ] : $default; }
-function update_option( $key, $value, $autoload = null ) { global $options; $options[ $key ] = $value; return true; }
-function wp_json_encode( $value ) { return json_encode( $value ); }
-class FakeWooLogger { public function info( $message, $context = array() ) {} }
-function wc_get_logger() { return new FakeWooLogger(); }
-
-$diagnostics_file = __DIR__ . '/../../includes/Diagnostics.php';
-if ( ! file_exists( $diagnostics_file ) ) {
-	fwrite( STDERR, "Diagnostics.php is missing\n" );
-	exit( 1 );
+// Capture everything that would go to the WooCommerce status logs.
+$log_calls = array();
+class CapturingWooLogger {
+	public function log( $level, $message, $context = array() ) {
+		global $log_calls;
+		$log_calls[] = array( 'level' => $level, 'message' => $message, 'context' => $context );
+	}
 }
+function wc_get_logger() { return new CapturingWooLogger(); }
+function wp_json_encode( $value ) { return json_encode( $value ); }
 
-require_once $diagnostics_file;
-require_once __DIR__ . '/../../includes/Logger.php';
+// Diagnostics must never touch the options table. If it calls a write function,
+// record it so we can fail the test.
+$option_writes = array();
+function update_option( $key, $value, $autoload = null ) { global $option_writes; $option_writes[] = $key; return true; }
+function add_option( $key, $value = '', $d = '', $a = null ) { global $option_writes; $option_writes[] = $key; return true; }
+$deleted_options = array();
+function delete_option( $key ) { global $deleted_options; $deleted_options[] = $key; return true; }
+
+require_once __DIR__ . '/../../includes/Diagnostics.php';
 
 use WCPOS\WooCommercePOS\MollieTerminal\Diagnostics;
-use WCPOS\WooCommercePOS\MollieTerminal\Logger;
 
 $secret = 'live_abcdefghijklmnopqrstuvwxyz123456';
+
 Diagnostics::record_api_error(
 	'Mollie API error for Bearer ' . $secret,
 	array( 'api_key' => $secret, 'payment_id' => 'tr_123', 'nested' => array( 'token' => 'Bearer ' . $secret ) )
 );
 
-$last_error = get_option( 'mtfwc_last_api_error', '' );
-expect( false !== strpos( $last_error, 'Mollie API error' ), 'last API error should include the safe message' );
-expect( false === strpos( $last_error, $secret ), 'last API error should redact API keys' );
-expect( false !== strpos( $last_error, 'live_***' ) || false !== strpos( $last_error, 'Bearer ***' ), 'last API error should show redaction marker' );
+expect( count( $log_calls ) === 1, 'record_api_error should write exactly one WC log line' );
+$call = $log_calls[0];
+expect( 'error' === $call['level'], 'API errors should log at error level' );
+expect( 'mollie-terminal-for-woocommerce' === ( $call['context']['source'] ?? '' ), 'logs should use the plugin log source' );
+expect( false !== strpos( $call['message'], 'Mollie API error' ), 'the safe message should be logged' );
+expect( false === strpos( $call['message'], $secret ), 'secrets must be redacted from the message' );
+expect( false !== strpos( $call['message'], 'live_***' ) || false !== strpos( $call['message'], 'Bearer ***' ), 'redaction marker should be present' );
+expect( false !== strpos( $call['message'], '"api_key":"***"' ), 'sensitive context keys should be replaced with ***' );
 
-$events = get_option( 'mtfwc_recent_diagnostic_events', array() );
-expect( count( $events ) === 1, 'record_api_error should append one event' );
-expect( 'error' === $events[0]['level'], 'API error event should be level error' );
-expect( false === strpos( wp_json_encode( $events[0] ), $secret ), 'diagnostic event should redact secrets' );
-expect( '***' === $events[0]['context']['api_key'], 'sensitive context keys should be replaced' );
+// "success" is an internal level; WC_Logger only understands PSR-3 levels.
+$log_calls = array();
+Diagnostics::record( 'success', 'Mollie terminal payment created.' );
+expect( 'info' === $log_calls[0]['level'], 'the internal success level should map to info for WC_Logger' );
 
-Logger::log( 'Mollie AJAX failed with Bearer ' . $secret, array( 'terminal_id' => 'term_123' ) );
-$events = Diagnostics::recent_events();
-expect( count( $events ) === 2, 'Logger::log should append a diagnostic event' );
-expect( false === strpos( wp_json_encode( $events ), $secret ), 'logger diagnostic event should be redacted' );
+// Nothing should ever be written to the options table.
+expect( array() === $option_writes, 'Diagnostics must not write to the options table' );
 
-Logger::log( 'Mollie AJAX failed with Bearer ' . $secret, array( '_mtfwc_diagnostics_recorded' => true, 'terminal_id' => 'term_123' ) );
-$events = Diagnostics::recent_events();
-expect( count( $events ) === 2, 'Logger::log should not duplicate diagnostics when the caller already recorded one' );
-
-for ( $i = 0; $i < 60; $i++ ) {
-	Diagnostics::record( 'info', 'event ' . $i );
-}
-$events = Diagnostics::recent_events();
-expect( count( $events ) === 50, 'diagnostic events should be capped at 50' );
-expect( 'event 10' === $events[0]['message'], 'diagnostic events should retain the newest entries' );
-expect( 'event 59' === $events[49]['message'], 'diagnostic events should keep the most recent event' );
+// The legacy diagnostic options are cleaned up on demand.
+Diagnostics::cleanup_legacy_options();
+expect( in_array( 'mtfwc_last_api_error', $deleted_options, true ), 'legacy last-api-error option should be deleted' );
+expect( in_array( 'mtfwc_recent_diagnostic_events', $deleted_options, true ), 'legacy recent-events option should be deleted' );
+expect( in_array( 'mtfwc_last_webhook_event', $deleted_options, true ), 'legacy last-webhook option should be deleted' );
 
 echo "diagnostics ok\n";

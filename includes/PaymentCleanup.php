@@ -54,7 +54,7 @@ class PaymentCleanup {
 			$order->add_order_note( sprintf( 'Mollie Terminal: open payment auto-cancel after order became %s (result: %s).', (string) $to_status, $status ) );
 			$order->save();
 		} catch ( Exception $e ) {
-			Logger::log( 'Auto-cancel of open Mollie terminal payment failed: ' . $e->getMessage() );
+			Diagnostics::record( 'error', 'Auto-cancel of open Mollie terminal payment failed: ' . $e->getMessage() );
 		}
 	}
 }

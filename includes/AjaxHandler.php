@@ -103,7 +103,7 @@ class AjaxHandler {
 		try {
 			$name = sanitize_text_field( wp_unslash( $_POST['name'] ?? 'WCPOS Terminal' ) );
 			wp_send_json_success( $this->terminal_service()->create_pairing_code( $name ) );
-		} catch ( Exception $e ) { Logger::log( 'Terminal pairing failed: ' . $e->getMessage() ); wp_send_json_error( $e->getMessage(), 500 ); }
+		} catch ( Exception $e ) { Diagnostics::record( 'error', 'Terminal pairing failed: ' . $e->getMessage() ); wp_send_json_error( $e->getMessage(), 500 ); }
 	}
 
 	private function with_order( string $operation, callable $callback ): void {
@@ -132,7 +132,6 @@ class AjaxHandler {
 			wp_send_json_success( $result );
 		} catch ( Exception $e ) {
 			Diagnostics::record( 'error', 'Mollie Terminal AJAX failed: ' . $e->getMessage(), array( 'operation' => $operation ) );
-			Logger::log( 'Mollie Terminal AJAX failed: ' . $e->getMessage(), array( Logger::CONTEXT_DIAGNOSTICS_RECORDED => true ) );
 			wp_send_json_error( $e->getMessage(), 500 );
 		}
 	}

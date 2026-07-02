@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Mollie Terminal for WooCommerce
  * Description: Adds Mollie Terminal support to WooCommerce for in-person payments.
- * Version:     0.3.0
+ * Version:     0.3.1
  * Author:      kilbot
  * Author URI:  https://kilbot.com/
  * Update URI:  https://github.com/wcpos/mollie-terminal-for-woocommerce
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'MTFWC_VERSION', '0.3.0' );
+define( 'MTFWC_VERSION', '0.3.1' );
 define( 'MTFWC_PLUGIN_FILE', __FILE__ );
 define( 'MTFWC_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'MTFWC_PLUGIN_URL', plugin_dir_url( __FILE__ ) );

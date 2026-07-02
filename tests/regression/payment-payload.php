@@ -8,6 +8,9 @@ function get_transient( $key ) { global $transients; return $transients[$key] ??
 function set_transient( $key, $value, $ttl ) { global $transients; $transients[$key] = $value; return true; }
 function delete_transient( $key ) { global $transients; unset( $transients[$key] ); }
 function __( $text, $domain = null ) { return $text; }
+function wp_json_encode( $value ) { return json_encode( $value ); }
+class NoopWooLoggerForPayload { public function log( $level, $message, $context = array() ) {} }
+function wc_get_logger() { return new NoopWooLoggerForPayload(); }
 function admin_url( $path = '' ) { return 'https://webshop.example.org/wp-admin/' . ltrim( $path, '/' ); }
 function add_query_arg( array $args, $url ) { return $url . ( false === strpos( $url, '?' ) ? '?' : '&' ) . http_build_query( $args ); }
 

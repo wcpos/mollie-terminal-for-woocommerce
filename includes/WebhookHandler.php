@@ -25,14 +25,12 @@ class WebhookHandler {
 			$order = $this->find_order_for_payment( $payment_id, $payment );
 			if ( ! $order ) {
 				Diagnostics::record( 'warning', 'Mollie webhook received for unknown payment.', array( 'payment_id' => $payment_id ) );
-				Logger::log( 'Mollie webhook received for unknown payment.', array( Logger::CONTEXT_DIAGNOSTICS_RECORDED => true, 'payment_id' => $payment_id ) ); status_header( 200 ); echo 'OK'; exit;
+				status_header( 200 ); echo 'OK'; exit;
 			}
 			( new PaymentReconciler( $settings ) )->reconcile( $order, $payment, 'webhook' );
-			update_option( 'mtfwc_last_webhook_event', array( 'payment_id' => $payment_id, 'received_at' => gmdate( 'c' ) ), false );
 			Diagnostics::record( 'success', 'Mollie webhook reconciled.', array( 'payment_id' => $payment_id, 'order_id' => (int) $order->get_id(), 'status' => $payment['status'] ?? '' ) );
 		} catch ( Exception $e ) {
 			Diagnostics::record( 'error', 'Mollie webhook failed: ' . $e->getMessage(), array( 'payment_id' => $payment_id ) );
-			Logger::log( 'Mollie webhook failed: ' . $e->getMessage(), array( Logger::CONTEXT_DIAGNOSTICS_RECORDED => true ) );
 		}
 		status_header( 200 ); echo 'OK'; exit;
 	}

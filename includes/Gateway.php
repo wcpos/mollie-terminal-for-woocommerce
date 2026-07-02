@@ -133,10 +133,9 @@ class Gateway extends WC_Payment_Gateway {
 
 	public function admin_options(): void {
 		parent::admin_options();
+		// Purge pre-0.3.1 diagnostic options now that logging goes to WC logs.
+		Diagnostics::cleanup_legacy_options();
 		$settings = new Settings();
-		$last_error = Diagnostics::last_api_error();
-		$last_webhook = get_option( 'mtfwc_last_webhook_event', array() );
-		$recent_events = Diagnostics::recent_events();
 		echo '<h2>' . esc_html__( 'Mollie Terminal Diagnostics', 'mollie-terminal-for-woocommerce' ) . '</h2>';
 		if ( 'live' !== $settings->mode() ) {
 			echo '<div class="notice notice-warning inline"><p>' . esc_html__( 'Test mode is selected. Mollie terminals exist only on live accounts, so the test API key cannot drive a physical terminal. Switch to Live mode with your live API key to take terminal payments.', 'mollie-terminal-for-woocommerce' ) . '</p></div>';
@@ -145,9 +144,13 @@ class Gateway extends WC_Payment_Gateway {
 		$this->row( __( 'Active environment', 'mollie-terminal-for-woocommerce' ), $settings->mode() );
 		$this->row( __( 'Selected default terminal', 'mollie-terminal-for-woocommerce' ), $settings->default_terminal_id() );
 		$this->row( __( 'Webhook URL (sent automatically on every payment)', 'mollie-terminal-for-woocommerce' ), $settings->webhook_url() );
-		$this->row( __( 'Last API error', 'mollie-terminal-for-woocommerce' ), is_string( $last_error ) ? $last_error : '' );
-		$this->row( __( 'Last webhook event', 'mollie-terminal-for-woocommerce' ), is_array( $last_webhook ) ? wp_json_encode( $last_webhook ) : '' );
-		$this->row( __( 'Recent diagnostic events', 'mollie-terminal-for-woocommerce' ), empty( $recent_events ) ? '[]' : wp_json_encode( array_slice( $recent_events, -10 ) ) );
+		echo '<tr><th>' . esc_html__( 'Payment logs', 'mollie-terminal-for-woocommerce' ) . '</th><td>';
+		printf(
+			/* translators: %s: link to the WooCommerce status logs screen. */
+			esc_html__( 'Recorded in %s (source: mollie-terminal-for-woocommerce).', 'mollie-terminal-for-woocommerce' ),
+			'<a href="' . esc_url( admin_url( 'admin.php?page=wc-status&tab=logs' ) ) . '">' . esc_html__( 'WooCommerce → Status → Logs', 'mollie-terminal-for-woocommerce' ) . '</a>'
+		);
+		echo '</td></tr>';
 		echo '</tbody></table>';
 	}
 
@@ -292,7 +295,7 @@ class Gateway extends WC_Payment_Gateway {
 					}
 				}
 			} catch ( \Exception $e ) {
-				Logger::log( 'Mollie Terminal process_payment could not verify payment: ' . $e->getMessage() );
+				Diagnostics::record( 'error', 'Mollie Terminal process_payment could not verify payment: ' . $e->getMessage() );
 			}
 		}
 		if ( $order->is_paid() ) {
