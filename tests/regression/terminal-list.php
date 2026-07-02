@@ -22,7 +22,7 @@ function wp_send_json_error( $data = null, $status_code = null ) { throw new Jso
 function wp_send_json_success( $data = null, $status_code = null ) { throw new JsonResponseForTerminalList( $data, (int) $status_code ); }
 
 require_once __DIR__ . '/../../includes/Settings.php';
-require_once __DIR__ . '/../../includes/Diagnostics.php';
+require_once __DIR__ . '/../../includes/Logger.php';
 require_once __DIR__ . '/../../includes/AjaxHandler.php';
 
 use WCPOS\WooCommercePOS\MollieTerminal\AjaxHandler;

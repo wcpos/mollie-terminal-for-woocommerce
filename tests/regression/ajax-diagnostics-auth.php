@@ -12,6 +12,14 @@ function __( $text, $domain = null ) { return $text; }
 function wp_hash( $data ) { return hash( 'sha256', $data ); }
 function wp_salt( $scheme = '' ) { return 'test-salt'; }
 function wp_doing_ajax() { return false; }
+function wp_json_encode( $value ) { return json_encode( $value ); }
+
+// Capture anything that would be written to the WooCommerce status logs.
+$log_calls = array();
+class CapturingWooLoggerForAuth {
+	public function log( $level, $message, $context = array() ) { global $log_calls; $log_calls[] = $message; }
+}
+function wc_get_logger() { return new CapturingWooLoggerForAuth(); }
 
 class JsonResponseForAjaxDiagnostics extends Error {
 	public $data;
@@ -21,11 +29,10 @@ class JsonResponseForAjaxDiagnostics extends Error {
 function wp_send_json_error( $data = null, $status_code = null ) { throw new JsonResponseForAjaxDiagnostics( $data, (int) $status_code ); }
 function wp_send_json_success( $data = null, $status_code = null ) { throw new JsonResponseForAjaxDiagnostics( $data, (int) $status_code ); }
 
-require_once __DIR__ . '/../../includes/Diagnostics.php';
+require_once __DIR__ . '/../../includes/Logger.php';
 require_once __DIR__ . '/../../includes/AjaxHandler.php';
 
 use WCPOS\WooCommercePOS\MollieTerminal\AjaxHandler;
-use WCPOS\WooCommercePOS\MollieTerminal\Diagnostics;
 
 $_POST = array( 'order_id' => '123', 'order_token' => 'invalid-token' );
 $handler = new AjaxHandler();
@@ -38,6 +45,6 @@ try {
 	expect( 403 === $response->status, 'unauthorized AJAX request should be rejected' );
 }
 
-expect( array() === Diagnostics::recent_events(), 'unauthorized AJAX requests should not persist diagnostic events' );
+expect( array() === $log_calls, 'unauthorized AJAX requests should not log any diagnostics' );
 
 echo "ajax-diagnostics-auth ok\n";

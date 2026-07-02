@@ -2,6 +2,18 @@
 
 All notable changes to Mollie Terminal for WooCommerce will be documented in this file.
 
+## 0.3.1 - 2026-07-02
+
+### Changed
+
+- All plugin diagnostics now go to the WooCommerce status logs (WooCommerce → Status → Logs, source `mollie-terminal-for-woocommerce`) instead of the `wp_options` table (issue #5). Removes option bloat and the non-atomic capped-array event store; WooCommerce's logger is the durable, concurrency-safe sink.
+- Replaced the bespoke `Diagnostics` class with a `Logger` matching the WooCommerce POS terminal-gateway convention shared by the Stripe, SumUp, PayArc, and Square terminal plugins (a `Logger` class, a `WC_LOG_FILENAME` source constant, an `mtfwc_logging` filter toggle, and no options-table access). Redaction is kept because this plugin logs Mollie API payloads.
+- The gateway settings "Diagnostics" panel now links to WooCommerce → Status → Logs instead of dumping recent events, the last API error, and the last webhook event from options.
+
+### Removed
+
+- Stopped writing the `mtfwc_recent_diagnostic_events`, `mtfwc_last_api_error`, and `mtfwc_last_webhook_event` options. Any existing values are deleted when the settings screen is opened.
+
 ## 0.3.0 - 2026-07-02
 
 ### Fixed

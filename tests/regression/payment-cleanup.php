@@ -7,9 +7,12 @@ function get_option( $key, $default = false ) { global $options; return $options
 function update_option( $key, $value, $autoload = null ) { global $options; $options[ $key ] = $value; return true; }
 function add_action( $hook, $callback, $priority = 10, $args = 1 ) { global $actions; $actions[ $hook ] = $callback; }
 function __( $text, $domain = null ) { return $text; }
+function wp_json_encode( $value ) { return json_encode( $value ); }
+class NoopWooLoggerForCleanup { public function log( $level, $message, $context = array() ) {} }
+function wc_get_logger() { return new NoopWooLoggerForCleanup(); }
 
 require_once __DIR__ . '/../../includes/Settings.php';
-require_once __DIR__ . '/../../includes/Diagnostics.php';
+require_once __DIR__ . '/../../includes/Logger.php';
 require_once __DIR__ . '/../../includes/PaymentAttempt.php';
 require_once __DIR__ . '/../../includes/Services/MollieApiClient.php';
 require_once __DIR__ . '/../../includes/Services/TerminalService.php';

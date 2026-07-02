@@ -47,14 +47,14 @@ class PaymentCleanup {
 		if ( ! $current || empty( $current['payment_id'] ) || ! PaymentAttempt::is_non_final( (string) ( $current['status'] ?? '' ) ) ) {
 			return;
 		}
-		Diagnostics::record( 'info', 'Order left the payable state with an open Mollie terminal payment; canceling it.', array( 'order_id' => (int) $order_id, 'to_status' => (string) $to_status, 'payment_id' => $current['payment_id'] ) );
+		Logger::log( 'Order left the payable state with an open Mollie terminal payment; canceling it.', array( 'order_id' => (int) $order_id, 'to_status' => (string) $to_status, 'payment_id' => $current['payment_id'] ), 'info' );
 		try {
 			$result = $this->service()->cancel_order_payment( $order );
 			$status   = is_array( $result ) ? (string) ( $result['status'] ?? '' ) : '';
 			$order->add_order_note( sprintf( 'Mollie Terminal: open payment auto-cancel after order became %s (result: %s).', (string) $to_status, $status ) );
 			$order->save();
 		} catch ( Exception $e ) {
-			Logger::log( 'Auto-cancel of open Mollie terminal payment failed: ' . $e->getMessage() );
+			Logger::log( 'Auto-cancel of open Mollie terminal payment failed: ' . $e->getMessage(), array(), 'error' );
 		}
 	}
 }

@@ -40,10 +40,10 @@ class AjaxHandler {
 			$settings = $this->settings();
 			$default  = $settings->default_terminal_id();
 			$items    = self::selectable_terminals( self::normalize_terminals( $this->terminal_service()->list_terminals() ), $settings->enabled_terminal_ids() );
-			Diagnostics::record( 'info', 'Mollie Terminal list retrieved.', array( 'order_id' => $order_id, 'count' => count( $items ) ) );
+			Logger::log( 'Mollie Terminal list retrieved.', array( 'order_id' => $order_id, 'count' => count( $items ) ), 'info' );
 			wp_send_json_success( array( 'terminals' => $items, 'default_terminal_id' => $default, 'lock_terminal' => $settings->lock_terminal() ) );
 		} catch ( Exception $e ) {
-			Diagnostics::record( 'error', 'Mollie Terminal list failed: ' . $e->getMessage(), array( 'order_id' => $order_id ) );
+			Logger::log( 'Mollie Terminal list failed: ' . $e->getMessage(), array( 'order_id' => $order_id ), 'error' );
 			wp_send_json_error( $e->getMessage(), 500 );
 		}
 	}
@@ -103,7 +103,7 @@ class AjaxHandler {
 		try {
 			$name = sanitize_text_field( wp_unslash( $_POST['name'] ?? 'WCPOS Terminal' ) );
 			wp_send_json_success( $this->terminal_service()->create_pairing_code( $name ) );
-		} catch ( Exception $e ) { Logger::log( 'Terminal pairing failed: ' . $e->getMessage() ); wp_send_json_error( $e->getMessage(), 500 ); }
+		} catch ( Exception $e ) { Logger::log( 'Terminal pairing failed: ' . $e->getMessage(), array(), 'error' ); wp_send_json_error( $e->getMessage(), 500 ); }
 	}
 
 	private function with_order( string $operation, callable $callback ): void {
@@ -115,10 +115,10 @@ class AjaxHandler {
 			if ( ! $this->can_access_order( $order_id ) ) {
 				wp_send_json_error( __( 'Unauthorized request.', 'mollie-terminal-for-woocommerce' ), 403 );
 			}
-			Diagnostics::record( 'info', 'Mollie Terminal AJAX request received.', array( 'operation' => $operation, 'order_id' => $order_id ) );
+			Logger::log( 'Mollie Terminal AJAX request received.', array( 'operation' => $operation, 'order_id' => $order_id ), 'info' );
 			$order = wc_get_order( $order_id );
 			if ( ! $order ) {
-				Diagnostics::record( 'error', 'Mollie Terminal AJAX request used invalid order.', array( 'operation' => $operation, 'order_id' => $order_id ) );
+				Logger::log( 'Mollie Terminal AJAX request used invalid order.', array( 'operation' => $operation, 'order_id' => $order_id ), 'error' );
 				wp_send_json_error( __( 'Invalid order.', 'mollie-terminal-for-woocommerce' ), 404 );
 			}
 			$result = $callback( $order );
@@ -128,11 +128,10 @@ class AjaxHandler {
 				// Hand the frontend the thank-you URL to navigate to directly.
 				$result['redirect_url'] = self::order_return_url( $order );
 			}
-			Diagnostics::record( 'success', 'Mollie Terminal AJAX request completed.', array( 'operation' => $operation, 'order_id' => $order_id, 'status' => is_array( $result ) ? ( $result['status'] ?? '' ) : '' ) );
+			Logger::log( 'Mollie Terminal AJAX request completed.', array( 'operation' => $operation, 'order_id' => $order_id, 'status' => is_array( $result ) ? ( $result['status'] ?? '' ) : '' ), 'success' );
 			wp_send_json_success( $result );
 		} catch ( Exception $e ) {
-			Diagnostics::record( 'error', 'Mollie Terminal AJAX failed: ' . $e->getMessage(), array( 'operation' => $operation ) );
-			Logger::log( 'Mollie Terminal AJAX failed: ' . $e->getMessage(), array( Logger::CONTEXT_DIAGNOSTICS_RECORDED => true ) );
+			Logger::log( 'Mollie Terminal AJAX failed: ' . $e->getMessage(), array( 'operation' => $operation ), 'error' );
 			wp_send_json_error( $e->getMessage(), 500 );
 		}
 	}
