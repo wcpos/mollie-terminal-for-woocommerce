@@ -97,14 +97,78 @@ class MolliePaymentService {
 				Logger::log( 'Mollie terminal cancel reconciled final payment state.', array( 'order_id' => (int) $order->get_id(), 'status' => $payment['status'] ?? '' ), 'info' );
 				return $this->reconciler->reconcile( $order, $payment, 'cancel' );
 			}
-			if ( isset( $payment['isCancelable'] ) && ! $payment['isCancelable'] ) {
-				Logger::log( 'Mollie terminal payment is not cancelable.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'] ?? '' ), 'warning' );
-				return array( 'status' => 'not_cancelable', 'message' => __( 'This Mollie payment cannot be canceled from WooCommerce.', 'mollie-terminal-for-woocommerce' ) );
+			// The payment is still open. Ask Mollie to cancel it when it allows
+			// that (a payment already dispatched to and accepted by a terminal
+			// reports isCancelable = false).
+			$cancelable = ! isset( $payment['isCancelable'] ) || $payment['isCancelable'];
+			if ( $cancelable ) {
+				try { $this->client->cancel_payment( $current['payment_id'] ); } catch ( RuntimeException $e ) { /* completion race or transient failure: re-fetch below */ }
+				$payment = $this->client->get_payment( $current['payment_id'] );
 			}
-			try { $this->client->cancel_payment( $current['payment_id'] ); } catch ( RuntimeException $e ) { /* completion race: fetch and reconcile below */ }
-			$payment = $this->client->get_payment( $current['payment_id'] );
-			Logger::log( 'Mollie terminal cancel request completed.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'] ?? '', 'status' => $payment['status'] ?? '' ), 'success' );
-			return $this->reconciler->reconcile( $order, $payment, 'cancel' );
+			if ( ! PaymentAttempt::is_non_final( (string) ( $payment['status'] ?? '' ) ) ) {
+				Logger::log( 'Mollie terminal cancel request completed.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'] ?? '', 'status' => $payment['status'] ?? '' ), 'success' );
+				return $this->reconciler->reconcile( $order, $payment, 'cancel' );
+			}
+			// Mollie will not (or cannot yet) cancel — most often an unresponsive
+			// or powered-off terminal holding the payment open. Detach the attempt
+			// locally so the cashier regains control and can start a fresh payment
+			// or choose another method; the webhook and the stale-payment sweep
+			// reconcile the lingering Mollie payment.
+			PaymentAttempt::abandon_current( $order );
+			$order->add_order_note( __( 'Mollie Terminal: payment could not be canceled (terminal unresponsive); attempt abandoned locally and left for automatic cleanup.', 'mollie-terminal-for-woocommerce' ) );
+			$order->save();
+			Logger::log( 'Mollie terminal payment abandoned locally; still open at Mollie.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'] ?? '', 'status' => $payment['status'] ?? '' ), 'warning' );
+			return array( 'status' => 'abandoned', 'message' => __( 'The terminal did not respond, so the payment was set aside. Start a new payment or choose another method.', 'mollie-terminal-for-woocommerce' ) );
 		} );
+	}
+
+	/**
+	 * Resolve payments that were detached from the order while still open at Mollie.
+	 *
+	 * cancel_order_payment() clears the current-attempt pointer so the cashier
+	 * regains control, but the payment can still be open on the Mollie side. Those
+	 * IDs are parked in order meta and retried here by the stale-payment sweep:
+	 * cancel what Mollie will cancel, and complete the order when the terminal
+	 * turns out to have approved the payment after all. Returns a
+	 * payment_id => outcome map. Uses its own lock so it can run alongside (not
+	 * inside) cancel_order_payment.
+	 */
+	public function cancel_abandoned_payments( $order ): array {
+		$payment_ids = PaymentAttempt::abandoned( $order );
+		if ( empty( $payment_ids ) ) { return array(); }
+		return PaymentLock::with_lock( (int) $order->get_id(), 'cancel_abandoned', function () use ( $order, $payment_ids ) {
+			$results = array();
+			foreach ( $payment_ids as $payment_id ) {
+				try {
+					$results[ $payment_id ] = $this->resolve_abandoned_payment( $order, $payment_id );
+				} catch ( RuntimeException $e ) {
+					Logger::log( 'Could not resolve abandoned Mollie terminal payment: ' . $e->getMessage(), array( 'order_id' => (int) $order->get_id(), 'payment_id' => $payment_id ), 'error' );
+					$results[ $payment_id ] = 'error';
+				}
+			}
+			return $results;
+		} );
+	}
+
+	private function resolve_abandoned_payment( $order, string $payment_id ): string {
+		$payment = $this->client->get_payment( $payment_id );
+		$status = PaymentAttempt::payment_status( $payment );
+		if ( ! PaymentAttempt::is_final( $status ) ) {
+			// Still holding the terminal hostage: only Mollie can tell us whether it
+			// has given up on it yet.
+			if ( isset( $payment['isCancelable'] ) && ! $payment['isCancelable'] ) {
+				Logger::log( 'Abandoned Mollie terminal payment is still open and not cancelable; retrying on the next sweep.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $payment_id, 'status' => $status ), 'warning' );
+				return 'still_open';
+			}
+			try { $this->client->cancel_payment( $payment_id ); } catch ( RuntimeException $e ) { /* completion race or transient failure: re-fetch below */ }
+			$payment = $this->client->get_payment( $payment_id );
+			$status = PaymentAttempt::payment_status( $payment );
+		}
+		if ( ! PaymentAttempt::is_final( $status ) ) { return 'still_open'; }
+		// reconcile() completes the order when the payment turns out paid, and
+		// drops the ID from the abandoned list now that it is final.
+		$this->reconciler->reconcile( $order, $payment, 'abandoned_sweep' );
+		Logger::log( 'Abandoned Mollie terminal payment resolved.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $payment_id, 'status' => $status ), 'success' );
+		return $status;
 	}
 }

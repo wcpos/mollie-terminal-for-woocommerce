@@ -1,0 +1,327 @@
+# Dutch (nl_NL) translation for Mollie Terminal for WooCommerce.
+# Initial translation — review welcome.
+msgid ""
+msgstr ""
+"Project-Id-Version: Mollie Terminal for WooCommerce 0.4.0\n"
+"PO-Revision-Date: 2026-07-08 00:00+0000\n"
+"Last-Translator: kilbot\n"
+"Language-Team: Dutch\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: nl_NL\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"X-Domain: mollie-terminal-for-woocommerce\n"
+
+#: includes/Gateway.php:34 includes/Gateway.php:168
+msgid "API key source"
+msgstr "Bron API-sleutel"
+
+#: includes/Gateway.php:13
+msgid "Accept in-person payments using Mollie Terminal."
+msgstr "Accepteer betalingen ter plaatse met Mollie Terminal."
+
+#: includes/Gateway.php:163
+msgid "Active environment"
+msgstr "Actieve omgeving"
+
+#: includes/Gateway.php:253 includes/Gateway.php:313
+msgid "Cancel Terminal Payment"
+msgstr "Terminalbetaling annuleren"
+
+#: includes/Gateway.php:54
+msgid "Cashiers cannot change the terminal at checkout — the default terminal is always used."
+msgstr "Kassamedewerkers kunnen de terminal niet wijzigen bij het afrekenen — de standaardterminal wordt altijd gebruikt."
+
+#: includes/Gateway.php:60
+msgid "Checkout debug logs"
+msgstr "Debuglogboeken bij afrekenen"
+
+#: includes/Gateway.php:274
+msgid "Clear"
+msgstr "Wissen"
+
+#: includes/Gateway.php:325
+msgid "Contacting Mollie Terminal…"
+msgstr "Contact maken met Mollie Terminal…"
+
+#: includes/Gateway.php:273
+msgid "Copy"
+msgstr "Kopiëren"
+
+#: includes/Gateway.php:329
+msgid "Could not load terminals."
+msgstr "Kan terminals niet laden."
+
+#: includes/Gateway.php:77
+msgid "Default terminal"
+msgstr "Standaardterminal"
+
+#: includes/Gateway.php:31
+msgid "Description"
+msgstr "Omschrijving"
+
+#: includes/Gateway.php:29
+msgid "Enable Mollie Terminal for checkout/POS."
+msgstr "Mollie Terminal inschakelen voor afrekenen/kassa."
+
+#: includes/Gateway.php:29
+msgid "Enable/Disable"
+msgstr "In-/uitschakelen"
+
+#: includes/Gateway.php:103
+msgid "Enabled terminals"
+msgstr "Ingeschakelde terminals"
+
+#: includes/PaymentSweeper.php:39
+msgid "Every 10 minutes (Mollie Terminal cleanup)"
+msgstr "Elke 10 minuten (Mollie Terminal-opschoning)"
+
+#: includes/Gateway.php:308
+msgid "Hide logs"
+msgstr "Logboeken verbergen"
+
+#: includes/AjaxHandler.php:122 includes/Gateway.php:369
+msgid "Invalid order."
+msgstr "Ongeldige bestelling."
+
+#: includes/Gateway.php:32
+msgid "Live"
+msgstr "Live"
+
+#: includes/Gateway.php:244
+msgid "Loading terminals…"
+msgstr "Terminals laden…"
+
+#: includes/Gateway.php:52
+msgid "Lock terminal selection"
+msgstr "Terminalselectie vergrendelen"
+
+#: includes/Gateway.php:270
+msgid "Logs"
+msgstr "Logboeken"
+
+#: includes/Gateway.php:310
+msgid "Logs copied to clipboard."
+msgstr "Logboeken gekopieerd naar klembord."
+
+#: includes/Gateway.php:167
+msgid "MISSING"
+msgstr "ONTBREEKT"
+
+#: includes/Gateway.php:32
+msgid "Mode"
+msgstr "Modus"
+
+#: includes/Gateway.php:44
+msgid "Mollie API Key"
+msgstr "Mollie API-sleutel"
+
+#: includes/Gateway.php:165
+msgid "Mollie Payments plugin (shared key)"
+msgstr "Mollie Payments-plugin (gedeelde sleutel)"
+
+#: includes/Gateway.php:12 includes/Gateway.php:17 includes/Gateway.php:30 includes/Gateway.php:228
+msgid "Mollie Terminal"
+msgstr "Mollie Terminal"
+
+#: includes/Gateway.php:158
+msgid "Mollie Terminal Diagnostics"
+msgstr "Mollie Terminal-diagnostiek"
+
+#: mollie-terminal-for-woocommerce.php:52
+msgid "Mollie Terminal for WooCommerce requires PHP %1$s or newer. Your server is running PHP %2$s."
+msgstr "Mollie Terminal voor WooCommerce vereist PHP %1$s of nieuwer. Je server draait PHP %2$s."
+
+#: includes/Gateway.php:279
+msgid "Mollie Terminal payment activity will appear here..."
+msgstr "Mollie Terminal-betalingsactiviteit verschijnt hier..."
+
+#: includes/Gateway.php:326
+msgid "Mollie Terminal request failed. Copy logs for support."
+msgstr "Mollie Terminal-verzoek mislukt. Kopieer de logboeken voor support."
+
+#: includes/Gateway.php:314
+msgid "Mollie Terminal status: idle"
+msgstr "Mollie Terminal-status: inactief"
+
+#: includes/Services/MolliePaymentService.php:118
+msgid "Mollie Terminal: payment could not be canceled (terminal unresponsive); attempt abandoned locally and left for automatic cleanup."
+msgstr "Mollie Terminal: betaling kon niet worden geannuleerd (terminal reageert niet); poging lokaal afgebroken en overgelaten aan automatische opschoning."
+
+#: includes/Gateway.php:327
+msgid "No terminals found on this Mollie account."
+msgstr "Geen terminals gevonden op dit Mollie-account."
+
+#: includes/Gateway.php:63
+msgid "Off by default. Enable only when gathering logs for support — payment activity is always recorded in WooCommerce → Status → Logs regardless of this setting."
+msgstr "Standaard uit. Schakel dit alleen in om logboeken voor support te verzamelen — betalingsactiviteit wordt altijd vastgelegd in WooCommerce → Status → Logboeken, ongeacht deze instelling."
+
+#: includes/Gateway.php:108
+msgid "Only the selected terminals can be chosen at checkout. Leave empty to allow all active terminals. The default terminal is always available at checkout, even if it is not selected here."
+msgstr "Alleen de geselecteerde terminals kunnen bij het afrekenen worden gekozen. Laat leeg om alle actieve terminals toe te staan. De standaardterminal is altijd beschikbaar bij het afrekenen, ook als deze hier niet is geselecteerd."
+
+#: includes/AjaxHandler.php:113
+msgid "Order ID is required."
+msgstr "Bestellings-ID is vereist."
+
+#: includes/Gateway.php:18 includes/Gateway.php:31
+msgid "Pay in person using Mollie Terminal."
+msgstr "Betaal ter plaatse met Mollie Terminal."
+
+#: includes/Gateway.php:259
+msgid "Payment activity logs will appear here during checkout. If payment creation fails, copy these logs for support."
+msgstr "Betalingsactiviteitslogboeken verschijnen hier tijdens het afrekenen. Als het aanmaken van de betaling mislukt, kopieer deze logboeken dan voor support."
+
+#: includes/Gateway.php:320
+msgid "Payment canceled."
+msgstr "Betaling geannuleerd."
+
+#: includes/Gateway.php:317
+msgid "Payment complete — finishing order…"
+msgstr "Betaling voltooid — bestelling afronden…"
+
+#: includes/Gateway.php:319
+msgid "Payment failed. You can try again."
+msgstr "Betaling mislukt. Je kunt het opnieuw proberen."
+
+#: includes/Gateway.php:171
+msgid "Payment logs"
+msgstr "Betalingslogboeken"
+
+#: includes/Gateway.php:284
+msgid "Please enable JavaScript to use the Mollie Terminal integration."
+msgstr "Schakel JavaScript in om de Mollie Terminal-integratie te gebruiken."
+
+#: includes/Gateway.php:174
+msgid "Recorded in %s (source: mollie-terminal-for-woocommerce)."
+msgstr "Vastgelegd in %s (bron: mollie-terminal-for-woocommerce)."
+
+#: includes/Gateway.php:55
+msgid "Requires a default terminal to be selected."
+msgstr "Vereist dat er een standaardterminal is geselecteerd."
+
+#: includes/Gateway.php:41
+msgid "Reuse the API key already configured in Mollie Payments for WooCommerce (matched to the mode above), so keys are managed in one place. Falls back to the key below if the Mollie plugin has no key set."
+msgstr "Hergebruik de API-sleutel die al is ingesteld in Mollie Payments for WooCommerce (afgestemd op de modus hierboven), zodat sleutels op één plek worden beheerd. Valt terug op de sleutel hieronder als de Mollie-plugin geen sleutel heeft ingesteld."
+
+#: includes/Gateway.php:39
+msgid "Reuse the official Mollie plugin’s key"
+msgstr "Sleutel van de officiële Mollie-plugin hergebruiken"
+
+#: includes/AjaxHandler.php:102
+msgid "Security check failed"
+msgstr "Beveiligingscontrole mislukt"
+
+#: includes/Gateway.php:318
+msgid "Select a terminal first."
+msgstr "Selecteer eerst een terminal."
+
+#: includes/Gateway.php:169
+msgid "Selected default terminal"
+msgstr "Geselecteerde standaardterminal"
+
+#: includes/Gateway.php:230
+msgid "Send this order to a Mollie terminal. The payment completes automatically once the terminal confirms."
+msgstr "Stuur deze bestelling naar een Mollie-terminal. De betaling wordt automatisch voltooid zodra de terminal bevestigt."
+
+#: includes/Gateway.php:315
+msgid "Sending to terminal…"
+msgstr "Versturen naar terminal…"
+
+#: includes/Gateway.php:272 includes/Gateway.php:309
+msgid "Show logs"
+msgstr "Logboeken tonen"
+
+#: includes/Gateway.php:62
+msgid "Show the log tools (Show logs / Copy / Clear) on the checkout payment panel."
+msgstr "Toon de logboekknoppen (Logboeken tonen / Kopiëren / Wissen) op het betaalpaneel bij het afrekenen."
+
+#: includes/Gateway.php:253 includes/Gateway.php:312
+msgid "Start Terminal Payment"
+msgstr "Terminalbetaling starten"
+
+#: includes/Services/MolliePaymentService.php:82
+msgid "Still waiting; refresh terminal status or cancel/retry."
+msgstr "Nog steeds wachten; ververs de terminalstatus of annuleer/probeer opnieuw."
+
+#: includes/Gateway.php:233
+msgid "Terminal"
+msgstr "Terminal"
+
+#: includes/Gateway.php:78
+msgid "Terminal used by default at checkout. Fetched live from your Mollie account (inactive terminals are hidden)."
+msgstr "Terminal die standaard bij het afrekenen wordt gebruikt. Live opgehaald uit je Mollie-account (inactieve terminals worden verborgen)."
+
+#: includes/Gateway.php:32
+msgid "Test"
+msgstr "Test"
+
+#: includes/Gateway.php:160
+msgid "Test mode is selected. Mollie terminals exist only on live accounts, so the test API key cannot drive a physical terminal. Switch to Live mode with your live API key to take terminal payments."
+msgstr "Testmodus is geselecteerd. Mollie-terminals bestaan alleen op live-accounts, dus de test-API-sleutel kan geen fysieke terminal aansturen. Schakel over naar Live-modus met je live-API-sleutel om terminalbetalingen te ontvangen."
+
+#: includes/Gateway.php:321 includes/Services/MolliePaymentService.php:121
+msgid "The terminal did not respond, so the payment was set aside. Start a new payment or choose another method."
+msgstr "De terminal reageerde niet, dus de betaling is opzijgezet. Start een nieuwe betaling of kies een andere methode."
+
+#: includes/Gateway.php:365
+msgid "This order has not been paid on the terminal yet. Use “Start Terminal Payment” above and wait for the terminal to confirm — the order finishes on its own. If you have already paid, give it a few seconds and try again."
+msgstr "Deze bestelling is nog niet op de terminal betaald. Gebruik hierboven “Terminalbetaling starten” en wacht tot de terminal bevestigt — de bestelling wordt vanzelf afgerond. Als je al hebt betaald, wacht dan een paar seconden en probeer het opnieuw."
+
+#: includes/Gateway.php:324
+msgid "This payment can no longer be canceled."
+msgstr "Deze betaling kan niet meer worden geannuleerd."
+
+#: includes/Gateway.php:166
+msgid "This plugin’s own key"
+msgstr "Eigen sleutel van deze plugin"
+
+#: includes/Gateway.php:323
+msgid "Timed out waiting for the terminal — canceling the payment…"
+msgstr "Time-out bij het wachten op de terminal — betaling annuleren…"
+
+#: includes/Gateway.php:322
+msgid "Timed out waiting for the terminal. Check the terminal or try again."
+msgstr "Time-out bij het wachten op de terminal. Controleer de terminal of probeer het opnieuw."
+
+#: includes/Gateway.php:30
+msgid "Title"
+msgstr "Titel"
+
+#: includes/Gateway.php:311
+msgid "Unable to copy logs automatically."
+msgstr "Kan logboeken niet automatisch kopiëren."
+
+#: includes/AjaxHandler.php:37 includes/AjaxHandler.php:116
+msgid "Unauthorized request."
+msgstr "Niet-geautoriseerd verzoek."
+
+#: includes/Gateway.php:38
+msgid "Use the key entered below"
+msgstr "De hieronder ingevoerde sleutel gebruiken"
+
+#: includes/Gateway.php:44
+msgid "Use your live API key. Mollie terminals are only available on live accounts; the test API key cannot drive a physical terminal. Ignored when the API key source above is set to reuse the Mollie plugin’s key."
+msgstr "Gebruik je live-API-sleutel. Mollie-terminals zijn alleen beschikbaar op live-accounts; de test-API-sleutel kan geen fysieke terminal aansturen. Wordt genegeerd wanneer de bron van de API-sleutel hierboven is ingesteld op het hergebruiken van de sleutel van de Mollie-plugin."
+
+#: includes/Gateway.php:316
+msgid "Waiting for terminal…"
+msgstr "Wachten op terminal…"
+
+#: includes/Gateway.php:170
+msgid "Webhook URL (sent automatically on every payment)"
+msgstr "Webhook-URL (wordt automatisch bij elke betaling verstuurd)"
+
+#: includes/Gateway.php:175
+msgid "WooCommerce → Status → Logs"
+msgstr "WooCommerce → Status → Logboeken"
+
+#: includes/Gateway.php:167
+msgid "configured"
+msgstr "ingesteld"
+
+#: includes/Gateway.php:88 includes/Gateway.php:328
+msgid "— Select a terminal —"
+msgstr "— Selecteer een terminal —"
+

@@ -136,8 +136,8 @@
 	padding: 0 !important;
 }
 
-/* Button hierarchy: Start is the one action a cashier needs; Check Status and
-   Cancel are secondary. Styled explicitly so no theme button rule survives. */
+/* A single primary button toggles between Start and Cancel (data-mtfwc-mode).
+   Styled explicitly so no theme button rule survives. */
 #mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-payment-actions .button {
 	display: inline-block !important;
 	float: none !important;
@@ -169,7 +169,7 @@
 	border-color: #cbd5e1 !important;
 }
 
-#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-payment-actions .mtfwc-start-payment {
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-payment-actions .mtfwc-primary-action {
 	flex: 1 1 auto !important;
 	background: #1d4ed8 !important;
 	border-color: #1d4ed8 !important;
@@ -177,10 +177,24 @@
 	font-size: 14px !important;
 }
 
-#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-payment-actions .mtfwc-start-payment:hover:not(:disabled) {
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-payment-actions .mtfwc-primary-action:hover:not(:disabled) {
 	background: #1e40af !important;
 	border-color: #1e40af !important;
 	color: #fff !important;
+}
+
+/* Cancel mode: the same button reskinned so it reads as a stop action, not a
+   call to action, while a payment is in flight. */
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-payment-actions .mtfwc-primary-action[data-mtfwc-mode="cancel"] {
+	background: #fff !important;
+	border-color: #dc2626 !important;
+	color: #b91c1c !important;
+}
+
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-payment-actions .mtfwc-primary-action[data-mtfwc-mode="cancel"]:hover:not(:disabled) {
+	background: #fef2f2 !important;
+	border-color: #dc2626 !important;
+	color: #b91c1c !important;
 }
 
 #mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-payment-actions .button:disabled {
@@ -238,6 +252,12 @@
 	color: #334155 !important;
 	border: 0 !important;
 	border-top: 1px solid #e2e8f0 !important;
+}
+
+/* Log tools disabled in settings: the textarea stays in the DOM (JS writes to
+   it) but the whole section is hidden so no empty bordered strip shows. */
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-logging-section.mtfwc-logging-hidden {
+	display: none !important;
 }
 
 #mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-logging-header {

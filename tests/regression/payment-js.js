@@ -29,14 +29,14 @@ class FakeElement {
 	replaceChildren() { this.children = []; }
 	get firstChild() { return this.children[0] || null; }
 	// Mirror the real DOM: HTMLSelectElement.options is a read-only collection.
-	// Defining it as a getter with no setter means any `select.options = ...`
-	// throws in strict mode, exactly as a browser would (regression guard).
 	get options() { return makeNodeList(this.children.filter((c) => 'option' === c.tagName)); }
 	setAttribute(name, value) { this.attributes[name] = String(value); }
 	removeAttribute(name) { delete this.attributes[name]; }
 	getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null; }
 	addEventListener(type, callback) { (this.listeners[type] = this.listeners[type] || []).push(callback); }
-	click() { this.clickCount++; (this.listeners.click || []).forEach((callback) => callback({ target: this, preventDefault() {} })); }
+	fire(type, event) { (this.listeners[type] || []).forEach((cb) => cb(event || { target: this, preventDefault() {} })); }
+	// A disabled control emits no click, mirroring the real DOM.
+	click() { if (this.disabled) { return; } this.clickCount++; this.fire('click', { target: this, preventDefault() {} }); }
 	querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
 	querySelectorAll(selector) {
 		const className = selector.replace(/^\./, '');
@@ -65,14 +65,16 @@ function makePanel(orderId, attrs = {}) {
 	root.setAttribute('data-order-id', orderId);
 	root.setAttribute('data-order-token', 'token-' + orderId);
 	root.setAttribute('data-default-terminal-id', 'term_default');
+	root.setAttribute('data-gateway-id', 'mollie_terminal_for_woocommerce');
+	root.setAttribute('data-resume', '0');
 	Object.keys(attrs).forEach((name) => root.setAttribute(name, attrs[name]));
 	root.append(makeButton('mtfwc-toggle-log', 'Show logs')).setAttribute('data-expanded', 'false');
 	root.append(makeButton('mtfwc-clear-log', 'Clear logs'));
 	root.append(makeButton('mtfwc-copy-log', 'Copy logs'));
 	root.append(new FakeElement(['mtfwc-terminal-select']));
-	root.append(makeButton('mtfwc-start-payment', 'Start payment'));
-	root.append(makeButton('mtfwc-poll-payment', 'Check status'));
-	root.append(makeButton('mtfwc-cancel-payment', 'Cancel payment'));
+	const primary = makeButton('mtfwc-primary-action', 'Start Terminal Payment');
+	primary.setAttribute('data-mtfwc-mode', 'start');
+	root.append(primary);
 	root.append(new FakeElement(['mtfwc-payment-status']));
 	const content = root.append(new FakeElement(['mtfwc-log-content']));
 	content.style.display = 'none';
@@ -97,6 +99,7 @@ async function flush() {
 	const nativeBody = new FakeElement([]);
 	const storage = {};
 	const placeOrderButton = new FakeElement([]);
+	let checkedPaymentMethod = 'mollie_terminal_for_woocommerce';
 
 	// Controllable fake timers (payment.js uses setTimeout for the poll loop).
 	let timerSeq = 0;
@@ -124,6 +127,12 @@ async function flush() {
 			addEventListener() {},
 			createElement(tag) { const el = new FakeElement([]); el.tagName = tag; return el; },
 			getElementById(id) { return 'place_order' === id ? placeOrderButton : null; },
+			querySelector(selector) {
+				if ('input[name="payment_method"]:checked' === selector) {
+					return null === checkedPaymentMethod ? null : { value: checkedPaymentMethod };
+				}
+				return null;
+			},
 			querySelectorAll(selector) { return '.mtfwc-payment-interface' === selector ? panels.slice() : []; },
 		},
 		sessionStorage: {
@@ -139,15 +148,20 @@ async function flush() {
 			defaultTerminalId: 'term_default',
 			pollIntervalMs: 2000,
 			pollTimeoutMs: 300000,
-			i18n: { logsHidden: 'Show logs', logsShown: 'Hide logs', copied: 'Copied', copyFailed: 'Copy failed' },
+			i18n: {
+				logsHidden: 'Show logs', logsShown: 'Hide logs', copied: 'Copied', copyFailed: 'Copy failed',
+				startAction: 'Start Terminal Payment', cancelAction: 'Cancel Terminal Payment',
+				idle: 'Mollie Terminal status: idle',
+			},
 		},
 		location: { href: 'https://example.test/wcpos-checkout/order-pay/123/' },
 		addEventListener(type, callback) { (windowListeners[type] = windowListeners[type] || []).push(callback); },
 		navigator: { sendBeacon(url, body) { beacons.push({ url, body }); return true; } },
-		jQuery(target) { return { on(event, callback) { jqueryHandlers[event] = callback; } }; },
+		jQuery(target) { return { on(event, callback) { jqueryHandlers[event] = callback; return this; } }; },
 	};
 	context.jQuery = context.window.jQuery;
 	function firePagehide() { (windowListeners.pagehide || []).forEach((callback) => callback()); }
+	function firePaymentMethodChange() { nativeBody.fire('change', { target: { name: 'payment_method' } }); }
 
 	function lastAction() {
 		const call = fetchCalls[fetchCalls.length - 1];
@@ -177,11 +191,10 @@ async function flush() {
 	vm.createContext(context);
 	vm.runInContext(fs.readFileSync('assets/js/payment.js', 'utf8'), context);
 
-	const start = panel.querySelector('.mtfwc-start-payment');
-	const poll = panel.querySelector('.mtfwc-poll-payment');
-	const cancel = panel.querySelector('.mtfwc-cancel-payment');
+	const action = panel.querySelector('.mtfwc-primary-action');
 	const select = panel.querySelector('.mtfwc-terminal-select');
 	const textarea = panel.querySelector('.mtfwc-payment-log-textarea');
+	const statusEl = panel.querySelector('.mtfwc-payment-status');
 
 	// On bind the panel fetches the terminal list to populate the dropdown.
 	assert.strictEqual(fetchCalls.length, 1, 'binding a panel should request the terminal list');
@@ -198,15 +211,16 @@ async function flush() {
 	assert.strictEqual(select.value, 'term_default', 'the configured default terminal should be preselected');
 	assert.strictEqual(select.options.length, 2, 'the dropdown should list the fetched terminals');
 	assert.strictEqual(select.getAttribute('data-mtfwc-unavailable'), null, 'a populated dropdown must not carry the unavailable marker');
+	// An idle panel shows a static "idle" status so the cashier sees the terminal is ready.
+	assert(/idle/i.test(statusEl.textContent), 'an idle panel should show an idle status without polling');
 
-	// Duplicate Start clicks should be ignored while the request is pending.
-	start.click();
-	start.click();
+	// The single primary button starts in "start" mode; duplicate clicks are deduped.
+	assert.strictEqual(action.getAttribute('data-mtfwc-mode'), 'start', 'the primary button starts in start mode');
+	action.click();
+	action.click();
 	assert.strictEqual(fetchCalls.length, 2, 'duplicate Start clicks should not queue a second request');
 	assert.strictEqual(lastAction(), 'mtfwc_start_payment', 'Start should send mtfwc_start_payment');
-	assert.strictEqual(context.window.mtfwcPaymentData ? true : false, true);
-	assert.strictEqual(start.disabled && poll.disabled && cancel.disabled, true, 'action buttons should be disabled while starting');
-	// The selected terminal id must ride along with the start request.
+	assert.strictEqual(action.disabled, true, 'the primary button should be disabled while starting');
 	assert.strictEqual(fetchCalls[fetchCalls.length - 1].options.body.fields.terminal_id, 'term_default', 'start should send the selected terminal id');
 
 	await resolveNext({ status: 'created', payment: { id: 'tr_123', status: 'open', metadata: { email: 'customer@example.com', api_key: 'live_abcdefghijklmnopqrstuvwxyz123456' } } });
@@ -215,48 +229,112 @@ async function flush() {
 	assert(!textarea.value.includes('customer@example.com'), 'browser logs should not include customer metadata');
 	assert(!textarea.value.includes('live_abcdefghijklmnopqrstuvwxyz123456'), 'browser logs should not include API-like secrets');
 
-	// After a successful start the flow enters auto-poll: Start stays disabled,
-	// Cancel is available, and no immediate poll fetch is issued (it is scheduled).
-	assert.strictEqual(start.disabled, true, 'Start stays disabled while waiting for the terminal');
-	assert.strictEqual(cancel.disabled, false, 'Cancel is available while waiting for the terminal');
+	// After a successful start the flow enters auto-poll: the button flips to
+	// Cancel and stays enabled; the terminal select is frozen; no immediate poll.
+	assert.strictEqual(action.getAttribute('data-mtfwc-mode'), 'cancel', 'the button flips to cancel mode while waiting');
+	assert.strictEqual(action.disabled, false, 'the cancel button is available while waiting for the terminal');
+	assert.strictEqual(select.disabled, true, 'the terminal choice is frozen while a payment is in flight');
 	assert.strictEqual(fetchCalls.length, 2, 'auto-poll should be scheduled, not fired immediately');
 
-	// First scheduled poll returns pending -> should schedule another.
-	await fireTimers();
-	assert.strictEqual(lastAction(), 'mtfwc_poll_payment', 'the scheduled tick should poll payment status');
-	await resolveNext({ status: 'pending' });
-
-	// Manual "Check Status" polls should stay bounded in the log.
+	// Drive many poll ticks (all pending) to prove the log stays bounded.
 	for (let i = 0; i < 60; i++) {
-		poll.click();
-		await resolveNext({ status: 'poll-' + i });
+		await fireTimers();
+		assert.strictEqual(lastAction(), 'mtfwc_poll_payment', 'scheduled ticks should poll payment status');
+		await resolveNext({ status: 'pending' });
 	}
 	assert(textarea.value.split('\n').length <= 50, 'browser logs should keep a bounded number of lines');
 
 	// Next scheduled poll returns paid with a redirect URL -> navigate straight
-	// to the thank-you page (the order is already paid server-side; submitting
-	// the order-pay form would hit WooCommerce's "already paid" guard).
+	// to the thank-you page (the order is already paid server-side).
 	const thankYouUrl = 'https://example.test/wcpos-checkout/order-received/123?key=wc_order_test';
 	await fireTimers();
 	await resolveNext({ status: 'paid', redirect_url: thankYouUrl });
 	assert.strictEqual(context.window.location.href, thankYouUrl, 'a paid poll should redirect to the thank-you page');
 	assert.strictEqual(placeOrderButton.clickCount, 0, 'the order-pay form must not be re-submitted when a redirect URL is available');
+	assert.strictEqual(panel.mtfwcCompleted, true, 'the panel should be marked complete after a paid poll');
+	assert.strictEqual(action.getAttribute('data-mtfwc-mode'), 'start', 'the button returns to start mode after completion');
 
-	// A second paid signal must not double-complete the order.
-	context.window.location.href = 'sentinel';
-	poll.click();
+	// Resume: a panel rendered with data-resume="1" picks the poll loop back up
+	// on load (no Start click needed) with the button already in cancel mode.
+	const resumePanel = makePanel('321', { 'data-resume': '1' });
+	panels.push(resumePanel);
+	jqueryHandlers.updated_checkout();
+	// bind() fetches the terminal list, then resumes polling.
+	await resolveNext({ terminals: [{ id: 'term_default', label: 'Back office', status: 'active' }], default_terminal_id: 'term_default' });
+	assert(resumePanel.mtfwcPoll, 'a resuming panel should arm the poll loop on load');
+	assert.strictEqual(resumePanel.querySelector('.mtfwc-primary-action').getAttribute('data-mtfwc-mode'), 'cancel', 'a resuming panel shows the cancel button');
+	// Let the resumed poll settle as paid so it does not interfere with later panels.
+	await fireTimers();
 	await resolveNext({ status: 'paid', redirect_url: thankYouUrl });
-	assert.strictEqual(context.window.location.href, 'sentinel', 'order completion should be idempotent');
-	assert.strictEqual(placeOrderButton.clickCount, 0, 'idempotent completion should not fall back to #place_order');
 
-	// A failed cancel request must surface an error, not silently reset with a stale status.
-	cancel.click();
+	// A failed cancel request must surface an error, not silently reset.
+	const cancelPanel = makePanel('654');
+	panels.push(cancelPanel);
+	jqueryHandlers.updated_checkout();
+	await resolveNext({ terminals: [{ id: 'term_default', label: 'Back office', status: 'active' }], default_terminal_id: 'term_default' });
+	const cancelAction = cancelPanel.querySelector('.mtfwc-primary-action');
+	cancelAction.click();
+	await resolveNext({ status: 'created' });
+	assert.strictEqual(cancelAction.getAttribute('data-mtfwc-mode'), 'cancel', 'cancel panel is in cancel mode after start');
+	cancelAction.click(); // now in cancel mode -> cancel request
+	assert.strictEqual(lastAction(), 'mtfwc_cancel_payment', 'clicking the button in cancel mode cancels the payment');
 	await resolveError();
-	const statusEl = panel.querySelector('.mtfwc-payment-status');
-	assert(/failed/i.test(statusEl.textContent), 'a failed cancel should show an error status');
-	assert.strictEqual(cancel.disabled, false, 'buttons re-enable after a failed cancel');
+	assert(/failed/i.test(cancelPanel.querySelector('.mtfwc-payment-status').textContent), 'a failed cancel should show an error status');
+	assert.strictEqual(cancelAction.disabled, false, 'button re-enables after a failed cancel');
+	assert.strictEqual(cancelAction.getAttribute('data-mtfwc-mode'), 'start', 'button returns to start mode after a failed cancel');
 
-	// Checkout refresh should bind new panels exactly once.
+	// Abandon path: when the server cannot cancel (terminal off) it returns
+	// "abandoned"; the panel frees up so a fresh Start works.
+	cancelAction.click();
+	await resolveNext({ status: 'created' });
+	cancelAction.click();
+	await resolveNext({ status: 'abandoned', message: 'set aside' });
+	assert.strictEqual(cancelAction.getAttribute('data-mtfwc-mode'), 'start', 'an abandoned payment returns the panel to start mode');
+	assert.strictEqual(cancelAction.disabled, false, 'the button is usable again after abandon');
+	assert(!cancelPanel.mtfwcPoll, 'the poll loop stops after abandon');
+
+	// Switching payment method away from Mollie Terminal stops and cancels an
+	// in-flight payment so it does not linger open.
+	const methodPanel = makePanel('987');
+	panels.push(methodPanel);
+	jqueryHandlers.updated_checkout();
+	await resolveNext({ terminals: [{ id: 'term_default', label: 'Back office', status: 'active' }], default_terminal_id: 'term_default' });
+	methodPanel.querySelector('.mtfwc-primary-action').click();
+	await resolveNext({ status: 'created' });
+	assert(methodPanel.mtfwcPoll, 'method panel is polling after start');
+	const fetchesBeforeSwitch = fetchCalls.length;
+	checkedPaymentMethod = 'cod'; // customer decides to pay cash
+	firePaymentMethodChange();
+	await flush();
+	assert(!methodPanel.mtfwcPoll, 'switching payment method stops the poll loop');
+	assert.strictEqual(fetchCalls.length, fetchesBeforeSwitch + 1, 'switching payment method fires a cancel request');
+	assert.strictEqual(lastAction(), 'mtfwc_cancel_payment', 'switching payment method cancels the terminal payment');
+	// The cancel is still in flight: nothing may claim the payment was canceled yet.
+	assert(!/canceled/i.test(methodPanel.querySelector('.mtfwc-payment-status').textContent), 'the panel must wait for the cancel response before reporting a cancelation');
+	await resolveNext({ status: 'canceled' });
+	assert(/canceled/i.test(methodPanel.querySelector('.mtfwc-payment-status').textContent), 'a confirmed cancel reports the payment as canceled');
+
+	// Race: the terminal approves at the very moment the cashier switches method.
+	// The server reconciles the order as paid and answers the cancel with a
+	// redirect URL — the panel must finish the order, not say "canceled".
+	const raceUrl = 'https://example.test/wcpos-checkout/order-received/987?key=wc_order_race';
+	const racePanel = makePanel('1010');
+	panels.push(racePanel);
+	jqueryHandlers.updated_checkout();
+	await resolveNext({ terminals: [{ id: 'term_default', label: 'Back office', status: 'active' }], default_terminal_id: 'term_default' });
+	racePanel.querySelector('.mtfwc-primary-action').click();
+	await resolveNext({ status: 'created' });
+	checkedPaymentMethod = 'cod';
+	firePaymentMethodChange();
+	await flush();
+	assert.strictEqual(lastAction(), 'mtfwc_cancel_payment', 'the method switch fires the cancel');
+	await resolveNext({ status: 'paid', redirect_url: raceUrl });
+	assert.strictEqual(context.window.location.href, raceUrl, 'a cancel that comes back paid should complete the order');
+	assert.strictEqual(racePanel.mtfwcCompleted, true, 'the panel is marked complete when the cancel reconciled as paid');
+	assert(!/canceled/i.test(racePanel.querySelector('.mtfwc-payment-status').textContent), 'a paid order must never be reported as canceled');
+	checkedPaymentMethod = 'mollie_terminal_for_woocommerce';
+
+	// Checkout refresh binds new panels exactly once.
 	const refreshedPanel = makePanel('456');
 	panels.push(refreshedPanel);
 	assert(jqueryHandlers.updated_checkout, 'payment.js should listen for WooCommerce checkout refreshes');
@@ -264,21 +342,18 @@ async function flush() {
 	jqueryHandlers.updated_checkout();
 	refreshedPanel.querySelector('.mtfwc-toggle-log').click();
 	assert.strictEqual(refreshedPanel.querySelector('.mtfwc-toggle-log').getAttribute('data-expanded'), 'true', 'checkout refresh binding should attach handlers once to new panels');
+	await resolveNext({ terminals: [{ id: 'term_default', label: 'Back office', status: 'active' }], default_terminal_id: 'term_default' });
 
-	// Resolve the refreshed panel's terminal-list fetch.
-	await resolveNext({
-		terminals: [{ id: 'term_default', label: 'Back office', status: 'active' }],
-		default_terminal_id: 'term_default',
-	});
-
-	// Without a redirect URL the completion falls back to submitting #place_order.
-	refreshedPanel.querySelector('.mtfwc-poll-payment').click();
+	// Without a redirect URL, completion falls back to submitting #place_order.
+	const refreshedAction = refreshedPanel.querySelector('.mtfwc-primary-action');
+	refreshedAction.click();
+	await resolveNext({ status: 'created' });
+	await fireTimers();
 	await resolveNext({ status: 'paid' });
 	assert.strictEqual(placeOrderButton.clickCount, 1, 'completion falls back to #place_order when no redirect URL is provided');
 
-	// A timed-out auto-poll sends a cancel to Mollie instead of leaving the payment open.
-	const start456 = refreshedPanel.querySelector('.mtfwc-start-payment');
-	start456.click();
+	// A timed-out auto-poll sends a cancel to Mollie instead of leaving it open.
+	refreshedAction.click();
 	await resolveNext({ status: 'created' });
 	assert(refreshedPanel.mtfwcPoll, 'auto-poll should be armed after a successful start');
 	refreshedPanel.mtfwcPoll.deadline = 0; // force the timeout branch on the next tick
@@ -286,20 +361,28 @@ async function flush() {
 	assert.strictEqual(lastAction(), 'mtfwc_cancel_payment', 'a timed-out auto-poll should auto-cancel the payment');
 	await resolveNext({ status: 'canceled' });
 	assert(/timed out/i.test(refreshedPanel.querySelector('.mtfwc-payment-status').textContent), 'the timeout message should be shown after auto-cancel');
-	assert.strictEqual(start456.disabled, false, 'Start re-enables after a timed-out payment is canceled');
+	assert.strictEqual(refreshedAction.disabled, false, 'the button re-enables after a timed-out payment is canceled');
+	assert.strictEqual(refreshedAction.getAttribute('data-mtfwc-mode'), 'start', 'the button returns to start mode after timeout');
 
-	// A retry started while the timeout-cancel is still in flight must not have
-	// its UI clobbered by the stale cancel response.
-	start456.click();
+	// While the timeout auto-cancel is in flight the button is frozen (a click
+	// can't fire a stray request); once it resolves the cashier can retry.
+	refreshedAction.click();
 	await resolveNext({ status: 'created' });
 	refreshedPanel.mtfwcPoll.deadline = 0;
-	await fireTimers(); // timeout branch fires the cancel (request now pending)
-	start456.click(); // cashier retries immediately; start request queues behind the cancel
-	await resolveNext({ status: 'canceled' }); // stale cancel response arrives first
-	assert(/sending/i.test(refreshedPanel.querySelector('.mtfwc-payment-status').textContent), 'a stale timeout-cancel response must not clobber the new attempt');
-	await resolveNext({ status: 'created' }); // the retry's start response
+	await fireTimers(); // timeout branch fires the cancel
+	assert.strictEqual(refreshedAction.disabled, true, 'the button is frozen while the timeout-cancel is in flight');
+	refreshedAction.click(); // ignored: button disabled
+	assert.strictEqual(lastAction(), 'mtfwc_cancel_payment', 'a click during the frozen window queues no new request');
+	await resolveNext({ status: 'canceled' });
+	assert.strictEqual(refreshedAction.disabled, false, 'the button re-enables after the timeout-cancel resolves');
+	// Retry after the timeout resolved: a fresh Start proceeds to waiting.
+	refreshedAction.click();
+	assert.strictEqual(lastAction(), 'mtfwc_start_payment', 'a retry after timeout starts a fresh payment');
+	assert(/sending/i.test(refreshedPanel.querySelector('.mtfwc-payment-status').textContent), 'the retry shows the sending state');
+	await resolveNext({ status: 'created' });
 	assert(/waiting/i.test(refreshedPanel.querySelector('.mtfwc-payment-status').textContent), 'the retry should proceed to the waiting state');
-	// Wind the retry down so later pagehide assertions see no active poll here.
+	// Wind the retry's poll loop down so it does not fire a pagehide beacon later.
+	refreshedPanel.mtfwcPoll.deadline = 0;
 	await fireTimers();
 	await resolveNext({ status: 'canceled' });
 
@@ -309,14 +392,12 @@ async function flush() {
 	const fetchCountBefore = fetchCalls.length;
 	jqueryHandlers.updated_checkout();
 	assert.strictEqual(fetchCalls.length, fetchCountBefore, 'locked panels must not fetch the terminal list');
-	lockedPanel.querySelector('.mtfwc-start-payment').click();
+	lockedPanel.querySelector('.mtfwc-primary-action').click();
 	assert.strictEqual(lastAction(), 'mtfwc_start_payment', 'locked panel Start should fire');
 	assert.strictEqual(fetchCalls[fetchCalls.length - 1].options.body.fields.terminal_id, 'term_default', 'locked panels always send the default terminal');
 	await resolveNext({ status: 'created' });
 
-	// An empty terminal list disables the select and marks it unavailable, so
-	// resetToIdle() leaves it disabled (the non-empty path clears the marker,
-	// asserted on the populated panel above).
+	// An empty terminal list disables the select and marks it unavailable.
 	const emptyPanel = makePanel('999');
 	panels.push(emptyPanel);
 	jqueryHandlers.updated_checkout();
@@ -326,7 +407,7 @@ async function flush() {
 	assert.strictEqual(emptySelect.getAttribute('data-mtfwc-unavailable'), '1', 'an empty terminal list should mark the select unavailable');
 
 	// Closing the page while a payment is in flight fires one best-effort cancel
-	// beacon (completed/idle panels stay silent).
+	// beacon (the locked panel is still polling).
 	firePagehide();
 	assert.strictEqual(beacons.length, 1, 'exactly one cancel beacon should fire for the in-flight payment');
 	assert.strictEqual(beacons[0].body.fields.action, 'mtfwc_cancel_payment', 'the beacon should cancel the payment');

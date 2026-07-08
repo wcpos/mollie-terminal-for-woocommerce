@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Mollie Terminal for WooCommerce
  * Description: Adds Mollie Terminal support to WooCommerce for in-person payments.
- * Version:     0.3.1
+ * Version:     0.4.0
  * Author:      kilbot
  * Author URI:  https://kilbot.com/
  * Update URI:  https://github.com/wcpos/mollie-terminal-for-woocommerce
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'MTFWC_VERSION', '0.3.1' );
+define( 'MTFWC_VERSION', '0.4.0' );
 define( 'MTFWC_PLUGIN_FILE', __FILE__ );
 define( 'MTFWC_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'MTFWC_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -53,10 +53,21 @@ function mtfwc_activate(): void {
 }
 register_activation_hook( __FILE__, __NAMESPACE__ . '\\mtfwc_activate' );
 
+function mtfwc_deactivate(): void {
+	PaymentSweeper::unschedule();
+}
+register_deactivation_hook( __FILE__, __NAMESPACE__ . '\\mtfwc_deactivate' );
+
+function load_textdomain(): void {
+	load_plugin_textdomain( 'mollie-terminal-for-woocommerce', false, dirname( plugin_basename( MTFWC_PLUGIN_FILE ) ) . '/languages' );
+}
+add_action( 'init', __NAMESPACE__ . '\\load_textdomain' );
+
 function init(): void {
 	add_filter( 'woocommerce_payment_gateways', array( Gateway::class, 'register_gateway' ) );
 	new AjaxHandler();
 	new WebhookHandler();
 	new PaymentCleanup();
+	new PaymentSweeper();
 }
 add_action( 'plugins_loaded', __NAMESPACE__ . '\\init', 11 );
