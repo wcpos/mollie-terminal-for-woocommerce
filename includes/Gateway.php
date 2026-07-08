@@ -30,7 +30,18 @@ class Gateway extends WC_Payment_Gateway {
 			'title' => array( 'title' => __( 'Title', 'mollie-terminal-for-woocommerce' ), 'type' => 'text', 'default' => __( 'Mollie Terminal', 'mollie-terminal-for-woocommerce' ) ),
 			'description' => array( 'title' => __( 'Description', 'mollie-terminal-for-woocommerce' ), 'type' => 'textarea', 'default' => __( 'Pay in person using Mollie Terminal.', 'mollie-terminal-for-woocommerce' ) ),
 			'mode' => array( 'title' => __( 'Mode', 'mollie-terminal-for-woocommerce' ), 'type' => 'select', 'default' => 'test', 'options' => array( 'test' => __( 'Test', 'mollie-terminal-for-woocommerce' ), 'live' => __( 'Live', 'mollie-terminal-for-woocommerce' ) ) ),
-			'api_key' => array( 'title' => __( 'Mollie API Key', 'mollie-terminal-for-woocommerce' ), 'type' => 'password', 'default' => '', 'description' => __( 'Use your live API key. Mollie terminals are only available on live accounts; the test API key cannot drive a physical terminal.', 'mollie-terminal-for-woocommerce' ) ),
+			'api_key_source' => array(
+				'title'       => __( 'API key source', 'mollie-terminal-for-woocommerce' ),
+				'type'        => 'select',
+				'default'     => 'own',
+				'options'     => array(
+					'own'    => __( 'Use the key entered below', 'mollie-terminal-for-woocommerce' ),
+					'mollie' => __( 'Reuse the official Mollie plugin’s key', 'mollie-terminal-for-woocommerce' ),
+				),
+				'description' => __( 'Reuse the API key already configured in Mollie Payments for WooCommerce (matched to the mode above), so keys are managed in one place. Falls back to the key below if the Mollie plugin has no key set.', 'mollie-terminal-for-woocommerce' ),
+				'desc_tip'    => true,
+			),
+			'api_key' => array( 'title' => __( 'Mollie API Key', 'mollie-terminal-for-woocommerce' ), 'type' => 'password', 'default' => '', 'description' => __( 'Use your live API key. Mollie terminals are only available on live accounts; the test API key cannot drive a physical terminal. Ignored when the API key source above is set to reuse the Mollie plugin’s key.', 'mollie-terminal-for-woocommerce' ) ),
 			'default_terminal_id' => $this->default_terminal_field(),
 		);
 		$enabled_terminals_field = $this->enabled_terminals_field();
@@ -42,6 +53,14 @@ class Gateway extends WC_Payment_Gateway {
 			'type'        => 'checkbox',
 			'label'       => __( 'Cashiers cannot change the terminal at checkout — the default terminal is always used.', 'mollie-terminal-for-woocommerce' ),
 			'description' => __( 'Requires a default terminal to be selected.', 'mollie-terminal-for-woocommerce' ),
+			'desc_tip'    => true,
+			'default'     => 'no',
+		);
+		$this->form_fields['show_logs'] = array(
+			'title'       => __( 'Checkout debug logs', 'mollie-terminal-for-woocommerce' ),
+			'type'        => 'checkbox',
+			'label'       => __( 'Show the log tools (Show logs / Copy / Clear) on the checkout payment panel.', 'mollie-terminal-for-woocommerce' ),
+			'description' => __( 'Off by default. Enable only when gathering logs for support — payment activity is always recorded in WooCommerce → Status → Logs regardless of this setting.', 'mollie-terminal-for-woocommerce' ),
 			'desc_tip'    => true,
 			'default'     => 'no',
 		);
@@ -86,7 +105,7 @@ class Gateway extends WC_Payment_Gateway {
 			'class'       => 'wc-enhanced-select',
 			'options'     => $options,
 			'default'     => array(),
-			'description' => __( 'Only the selected terminals can be chosen at checkout. Leave empty to allow all active terminals.', 'mollie-terminal-for-woocommerce' ),
+			'description' => __( 'Only the selected terminals can be chosen at checkout. Leave empty to allow all active terminals. The default terminal is always available at checkout, even if it is not selected here.', 'mollie-terminal-for-woocommerce' ),
 			'desc_tip'    => true,
 		);
 	}
@@ -142,6 +161,11 @@ class Gateway extends WC_Payment_Gateway {
 		}
 		echo '<table class="form-table"><tbody>';
 		$this->row( __( 'Active environment', 'mollie-terminal-for-woocommerce' ), $settings->mode() );
+		$key_source = 'mollie' === $settings->api_key_source()
+			? __( 'Mollie Payments plugin (shared key)', 'mollie-terminal-for-woocommerce' )
+			: __( 'This plugin’s own key', 'mollie-terminal-for-woocommerce' );
+		$key_status = '' !== $settings->api_key() ? __( 'configured', 'mollie-terminal-for-woocommerce' ) : __( 'MISSING', 'mollie-terminal-for-woocommerce' );
+		$this->row( __( 'API key source', 'mollie-terminal-for-woocommerce' ), $key_source . ' — ' . $key_status );
 		$this->row( __( 'Selected default terminal', 'mollie-terminal-for-woocommerce' ), $settings->default_terminal_id() );
 		$this->row( __( 'Webhook URL (sent automatically on every payment)', 'mollie-terminal-for-woocommerce' ), $settings->webhook_url() );
 		echo '<tr><th>' . esc_html__( 'Payment logs', 'mollie-terminal-for-woocommerce' ) . '</th><td>';
@@ -175,16 +199,31 @@ class Gateway extends WC_Payment_Gateway {
 		$settings = new Settings();
 		$order_id = 0;
 		$order_token = '';
+		$order = null;
 		if ( function_exists( 'is_checkout_pay_page' ) && is_checkout_pay_page() ) {
 			$order_id = isset( $wp->query_vars['order-pay'] ) ? absint( $wp->query_vars['order-pay'] ) : 0;
-			if ( $order_id && wc_get_order( $order_id ) ) {
+			$order = $order_id ? wc_get_order( $order_id ) : null;
+			if ( $order ) {
 				$order_token = AjaxHandler::order_token( $order_id );
+			} else {
+				$order_id = 0;
+			}
+		}
+
+		// Resume the poll loop on reload when an unfinished payment is still open
+		// for this order — otherwise a refresh mid-payment drops the cashier back
+		// to an idle panel while the payment lingers open on Mollie.
+		$resume = false;
+		if ( $order && ! $order->is_paid() ) {
+			$current = PaymentAttempt::current( $order );
+			if ( $current && ! empty( $current['payment_id'] ) && PaymentAttempt::is_non_final( (string) ( $current['status'] ?? '' ) ) ) {
+				$resume = true;
 			}
 		}
 
 		$is_pos = function_exists( 'woocommerce_pos_request' ) && woocommerce_pos_request();
 		$locked = $settings->lock_terminal();
-		echo '<div id="mtfwc-payment-interface" class="mtfwc-payment-interface" data-order-id="' . esc_attr( $order_id ) . '" data-order-token="' . esc_attr( $order_token ) . '" data-default-terminal-id="' . esc_attr( $settings->default_terminal_id() ) . '" data-pos="' . ( $is_pos ? '1' : '0' ) . '" data-lock-terminal="' . ( $locked ? '1' : '0' ) . '">';
+		echo '<div id="mtfwc-payment-interface" class="mtfwc-payment-interface" data-order-id="' . esc_attr( $order_id ) . '" data-order-token="' . esc_attr( $order_token ) . '" data-default-terminal-id="' . esc_attr( $settings->default_terminal_id() ) . '" data-pos="' . ( $is_pos ? '1' : '0' ) . '" data-lock-terminal="' . ( $locked ? '1' : '0' ) . '" data-resume="' . ( $resume ? '1' : '0' ) . '" data-gateway-id="' . esc_attr( Settings::GATEWAY_ID ) . '">';
 		echo '<div class="mtfwc-payment-card">';
 		echo '<h4>' . esc_html__( 'Mollie Terminal', 'mollie-terminal-for-woocommerce' ) . '</h4>';
 		if ( $order_id ) {
@@ -207,10 +246,13 @@ class Gateway extends WC_Payment_Gateway {
 				echo '</select>';
 			}
 			echo '</div>';
+			// One button that toggles between Start and Cancel: while a payment is
+			// in flight the panel polls automatically, so a single control both
+			// starts and cancels the terminal payment (no separate status button).
+			$action_mode  = $resume ? 'cancel' : 'start';
+			$action_label = $resume ? __( 'Cancel Terminal Payment', 'mollie-terminal-for-woocommerce' ) : __( 'Start Terminal Payment', 'mollie-terminal-for-woocommerce' );
 			echo '<div class="mtfwc-payment-actions">';
-			echo '<button type="button" class="button button-primary mtfwc-start-payment" data-order-id="' . esc_attr( $order_id ) . '" data-order-token="' . esc_attr( $order_token ) . '">' . esc_html__( 'Start Terminal Payment', 'mollie-terminal-for-woocommerce' ) . '</button>';
-			echo '<button type="button" class="button mtfwc-poll-payment" data-order-id="' . esc_attr( $order_id ) . '" data-order-token="' . esc_attr( $order_token ) . '">' . esc_html__( 'Check Status', 'mollie-terminal-for-woocommerce' ) . '</button>';
-			echo '<button type="button" class="button mtfwc-cancel-payment" data-order-id="' . esc_attr( $order_id ) . '" data-order-token="' . esc_attr( $order_token ) . '">' . esc_html__( 'Cancel Payment', 'mollie-terminal-for-woocommerce' ) . '</button>';
+			echo '<button type="button" class="button button-primary mtfwc-primary-action" data-mtfwc-mode="' . esc_attr( $action_mode ) . '" data-order-id="' . esc_attr( $order_id ) . '" data-order-token="' . esc_attr( $order_token ) . '">' . esc_html( $action_label ) . '</button>';
 			echo '</div>';
 			echo '<div class="mtfwc-payment-status" role="status" aria-live="polite"></div>';
 		} else {
@@ -218,15 +260,21 @@ class Gateway extends WC_Payment_Gateway {
 		}
 		echo '</div>';
 
-		echo '<div class="mtfwc-logging-section">';
-		echo '<div class="mtfwc-logging-header">';
-		echo '<h4>' . esc_html__( 'Logs', 'mollie-terminal-for-woocommerce' ) . '</h4>';
-		echo '<div class="mtfwc-logging-actions">';
-		echo '<button type="button" class="button mtfwc-toggle-log" data-expanded="false">' . esc_html__( 'Show logs', 'mollie-terminal-for-woocommerce' ) . '</button>';
-		echo '<button type="button" class="button mtfwc-copy-log">' . esc_html__( 'Copy', 'mollie-terminal-for-woocommerce' ) . '</button>';
-		echo '<button type="button" class="button mtfwc-clear-log">' . esc_html__( 'Clear', 'mollie-terminal-for-woocommerce' ) . '</button>';
-		echo '</div>';
-		echo '</div>';
+		// The log tools are a support aid, hidden unless the merchant opts in.
+		// The textarea itself is always present (JS writes to it) but stays
+		// collapsed; only the toolbar visibility is gated.
+		$show_logs = $settings->show_logs();
+		echo '<div class="mtfwc-logging-section' . ( $show_logs ? '' : ' mtfwc-logging-hidden' ) . '">';
+		if ( $show_logs ) {
+			echo '<div class="mtfwc-logging-header">';
+			echo '<h4>' . esc_html__( 'Logs', 'mollie-terminal-for-woocommerce' ) . '</h4>';
+			echo '<div class="mtfwc-logging-actions">';
+			echo '<button type="button" class="button mtfwc-toggle-log" data-expanded="false">' . esc_html__( 'Show logs', 'mollie-terminal-for-woocommerce' ) . '</button>';
+			echo '<button type="button" class="button mtfwc-copy-log">' . esc_html__( 'Copy', 'mollie-terminal-for-woocommerce' ) . '</button>';
+			echo '<button type="button" class="button mtfwc-clear-log">' . esc_html__( 'Clear', 'mollie-terminal-for-woocommerce' ) . '</button>';
+			echo '</div>';
+			echo '</div>';
+		}
 		echo '<div class="mtfwc-log-content" style="display: none;">';
 		echo '<textarea class="mtfwc-payment-log-textarea" readonly placeholder="' . esc_attr__( 'Mollie Terminal payment activity will appear here...', 'mollie-terminal-for-woocommerce' ) . '"></textarea>';
 		echo '</div>';
@@ -261,17 +309,20 @@ class Gateway extends WC_Payment_Gateway {
 					'logsHidden' => __( 'Show logs', 'mollie-terminal-for-woocommerce' ),
 					'copied' => __( 'Logs copied to clipboard.', 'mollie-terminal-for-woocommerce' ),
 					'copyFailed' => __( 'Unable to copy logs automatically.', 'mollie-terminal-for-woocommerce' ),
+					'startAction' => __( 'Start Terminal Payment', 'mollie-terminal-for-woocommerce' ),
+					'cancelAction' => __( 'Cancel Terminal Payment', 'mollie-terminal-for-woocommerce' ),
+					'idle' => __( 'Mollie Terminal status: idle', 'mollie-terminal-for-woocommerce' ),
 					'sending' => __( 'Sending to terminal…', 'mollie-terminal-for-woocommerce' ),
 					'waiting' => __( 'Waiting for terminal…', 'mollie-terminal-for-woocommerce' ),
 					'completing' => __( 'Payment complete — finishing order…', 'mollie-terminal-for-woocommerce' ),
 					'selectTerminal' => __( 'Select a terminal first.', 'mollie-terminal-for-woocommerce' ),
 					'failed' => __( 'Payment failed. You can try again.', 'mollie-terminal-for-woocommerce' ),
 					'canceled' => __( 'Payment canceled.', 'mollie-terminal-for-woocommerce' ),
+					'abandoned' => __( 'The terminal did not respond, so the payment was set aside. Start a new payment or choose another method.', 'mollie-terminal-for-woocommerce' ),
 					'timedOut' => __( 'Timed out waiting for the terminal. Check the terminal or try again.', 'mollie-terminal-for-woocommerce' ),
 					'timedOutCanceling' => __( 'Timed out waiting for the terminal — canceling the payment…', 'mollie-terminal-for-woocommerce' ),
 					'notCancelable' => __( 'This payment can no longer be canceled.', 'mollie-terminal-for-woocommerce' ),
 					'contacting' => __( 'Contacting Mollie Terminal…', 'mollie-terminal-for-woocommerce' ),
-					'checkFailed' => __( 'Status check failed. Copy logs for support.', 'mollie-terminal-for-woocommerce' ),
 					'requestFailed' => __( 'Mollie Terminal request failed. Copy logs for support.', 'mollie-terminal-for-woocommerce' ),
 					'noTerminals' => __( 'No terminals found on this Mollie account.', 'mollie-terminal-for-woocommerce' ),
 					'selectTerminalOption' => __( '— Select a terminal —', 'mollie-terminal-for-woocommerce' ),
@@ -311,7 +362,7 @@ class Gateway extends WC_Payment_Gateway {
 		if ( $order->is_paid() ) {
 			return array( 'result' => 'success', 'redirect' => AjaxHandler::order_return_url( $order ) );
 		}
-		wc_add_notice( __( 'No completed Mollie Terminal payment was found for this order yet. Complete the payment on the terminal and try again.', 'mollie-terminal-for-woocommerce' ), 'error' );
+		wc_add_notice( __( 'This order has not been paid on the terminal yet. Use “Start Terminal Payment” above and wait for the terminal to confirm — the order finishes on its own. If you have already paid, give it a few seconds and try again.', 'mollie-terminal-for-woocommerce' ), 'notice' );
 		return array( 'result' => 'failure' );
 	}
 

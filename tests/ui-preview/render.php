@@ -40,6 +40,7 @@ function get_option( $key, $default = array() ) {
 		'default_terminal_id' => 'term_event_stand',
 		'description'         => 'Pay in person using Mollie Terminal.',
 		'lock_terminal'       => $preview_locked ? 'yes' : 'no',
+		'show_logs'           => 'yes',
 	);
 }
 function admin_url( $path = '' ) { return 'mock-ajax'; }
@@ -61,12 +62,15 @@ class WC_Payment_Gateway {
 
 class FakeOrderForPreview {
 	public function get_id() { return 6915; }
+	public function is_paid() { return false; }
+	public function get_meta( $key ) { return null; }
 }
 function wc_get_order( $order_id ) { return new FakeOrderForPreview(); }
 
 $GLOBALS['wp'] = (object) array( 'query_vars' => array( 'order-pay' => 6915 ) );
 
 require_once __DIR__ . '/../../includes/Settings.php';
+require_once __DIR__ . '/../../includes/PaymentAttempt.php';
 require_once __DIR__ . '/../../includes/AjaxHandler.php';
 require_once __DIR__ . '/../../includes/Gateway.php';
 

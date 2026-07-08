@@ -265,17 +265,26 @@
 		return 'pending';
 	}
 
-	function setActionButtonsDisabled(root, disabled) {
-		var selectors = ['.mtfwc-start-payment', '.mtfwc-poll-payment', '.mtfwc-cancel-payment'];
-		var buttons;
-		var i;
-		var j;
-		for (i = 0; i < selectors.length; i++) {
-			buttons = root.querySelectorAll(selectors[i]);
-			for (j = 0; j < buttons.length; j++) {
-				buttons[j].disabled = disabled;
-			}
+	// The panel has a single primary button that toggles between starting and
+	// canceling the terminal payment.
+	function setActionMode(root, mode) {
+		var button = root.querySelector('.mtfwc-primary-action');
+		if (!button) {
+			return;
 		}
+		button.setAttribute('data-mtfwc-mode', mode);
+		button.textContent = 'cancel' === mode
+			? t('cancelAction', 'Cancel Terminal Payment')
+			: t('startAction', 'Start Terminal Payment');
+	}
+
+	function actionMode(root) {
+		var button = root.querySelector('.mtfwc-primary-action');
+		return button ? (button.getAttribute('data-mtfwc-mode') || 'start') : 'start';
+	}
+
+	function setActionButtonsDisabled(root, disabled) {
+		setButtonDisabled(root, '.mtfwc-primary-action', disabled);
 	}
 
 	function setButtonDisabled(root, selector, disabled) {
@@ -308,6 +317,10 @@
 		select.disabled = false;
 	}
 
+	function showIdle(root) {
+		setStatus(root, t('idle', 'Mollie Terminal status: idle'), 'info');
+	}
+
 	// --- Auto-poll loop -------------------------------------------------------
 
 	function stopAutoPoll(root) {
@@ -317,6 +330,9 @@
 		}
 	}
 
+	// Enter the in-flight state: spinner on, terminal choice frozen, and the
+	// primary button flipped to "Cancel". Used both after a fresh Start and when
+	// resuming an already-open payment on page load.
 	function startAutoPoll(root) {
 		var data = getData();
 		var interval = data.pollIntervalMs || DEFAULT_POLL_INTERVAL_MS;
@@ -325,9 +341,10 @@
 		root.mtfwcPollSeq = (root.mtfwcPollSeq || 0) + 1;
 		root.mtfwcPoll = { deadline: nowMs() + timeout, timer: null, id: root.mtfwcPollSeq };
 		setBusy(root, true);
+		setSelectDisabled(root, true);
 		setStatus(root, t('waiting', 'Waiting for terminal…'), 'info');
-		setButtonDisabled(root, '.mtfwc-start-payment', true);
-		setButtonDisabled(root, '.mtfwc-cancel-payment', false);
+		setActionMode(root, 'cancel');
+		setButtonDisabled(root, '.mtfwc-primary-action', false);
 		schedulePoll(root, interval);
 	}
 
@@ -351,6 +368,9 @@
 			// after the timeout, actively cancel it.
 			var seqAtTimeout = root.mtfwcPollSeq;
 			setStatus(root, t('timedOutCanceling', 'Timed out waiting for the terminal — canceling the payment…'), 'error');
+			// Freeze the button while the auto-cancel is in flight so a stray click
+			// can't fire a second request; it re-enables in start mode on resolve.
+			setActionButtonsDisabled(root, true);
 			appendLog(root, 'warning', 'Auto-poll timed out; sending cancel to Mollie.');
 			postAction(root, 'mtfwc_cancel_payment').then(function (result) {
 				// A new attempt may have started while this cancel was in
@@ -358,17 +378,12 @@
 				if (root.mtfwcPoll || root.mtfwcCompleted || root.mtfwcPollSeq !== seqAtTimeout || root.getAttribute('data-mtfwc-request-pending') === 'true') {
 					return;
 				}
-				var status = resultStatus(result);
-				if ('paid' === classify(status)) {
+				if ('paid' === classify(resultStatus(result))) {
 					// The customer paid at the very last moment — complete instead.
 					completeOrder(root, resultRedirect(result));
 					return;
 				}
-				if ('not_cancelable' === status) {
-					setStatus(root, t('notCancelable', 'This payment can no longer be canceled.'), 'warning');
-				} else {
-					setStatus(root, t('timedOut', 'Timed out waiting for the terminal. Check the terminal or try again.'), 'error');
-				}
+				setStatus(root, t('timedOut', 'Timed out waiting for the terminal. Check the terminal or try again.'), 'error');
 				resetToIdle(root);
 			});
 			return;
@@ -388,6 +403,7 @@
 				resetToIdle(root);
 			} else if ('idle' === outcome) {
 				stopAutoPoll(root);
+				showIdle(root);
 				resetToIdle(root);
 			} else {
 				setStatus(root, t('waiting', 'Waiting for terminal…'), 'info');
@@ -396,12 +412,14 @@
 		});
 	}
 
+	// Return the panel to its idle state: spinner off, terminal choice unlocked,
+	// and the primary button flipped back to "Start". Callers set their own
+	// status message (e.g. "canceled", "failed") around this as appropriate.
 	function resetToIdle(root) {
 		setBusy(root, false);
 		setSelectDisabled(root, false);
-		setButtonDisabled(root, '.mtfwc-start-payment', false);
-		setButtonDisabled(root, '.mtfwc-poll-payment', false);
-		setButtonDisabled(root, '.mtfwc-cancel-payment', false);
+		setActionMode(root, 'start');
+		setButtonDisabled(root, '.mtfwc-primary-action', false);
 	}
 
 	// Payment succeeded. The order is already reconciled and paid server-side,
@@ -417,9 +435,13 @@
 			return;
 		}
 		root.mtfwcCompleted = true;
-		// Re-enable the controls so the UI is not stuck if finishing the order
-		// does not navigate away.
-		resetToIdle(root);
+		// Re-enable the controls (without overwriting the "finishing order…"
+		// status) so the UI is not stuck if finishing the order does not
+		// navigate away.
+		setBusy(root, false);
+		setSelectDisabled(root, false);
+		setActionMode(root, 'start');
+		setButtonDisabled(root, '.mtfwc-primary-action', false);
 
 		if (redirectUrl && window.location) {
 			window.location.href = redirectUrl;
@@ -441,6 +463,15 @@
 	}
 
 	// --- User actions ---------------------------------------------------------
+
+	// The primary button dispatches to Start or Cancel based on its current mode.
+	function onPrimaryAction(root) {
+		if ('cancel' === actionMode(root)) {
+			onCancel(root);
+		} else {
+			onStart(root);
+		}
+	}
 
 	function onStart(root) {
 		if (root.getAttribute('data-mtfwc-request-pending') === 'true') {
@@ -484,7 +515,6 @@
 			appendLog(root, 'warning', 'Ignoring duplicate Cancel while a request is pending.');
 			return;
 		}
-		var wasPolling = !!root.mtfwcPoll;
 		root.setAttribute('data-mtfwc-request-pending', 'true');
 		stopAutoPoll(root);
 		setActionButtonsDisabled(root, true);
@@ -498,48 +528,57 @@
 				return;
 			}
 			var status = resultStatus(result);
-			if ('not_cancelable' === status) {
-				setStatus(root, t('notCancelable', 'This payment can no longer be canceled.'), 'warning');
-				if (wasPolling) {
-					startAutoPoll(root);
-				} else {
-					resetToIdle(root);
-				}
+			if ('paid' === classify(status)) {
+				completeOrder(root, resultRedirect(result));
 				return;
 			}
-			var outcome = classify(status);
-			if ('paid' === outcome) {
-				completeOrder(root, resultRedirect(result));
-			} else if ('failed' === outcome) {
-				setStatus(root, t('canceled', 'Payment canceled.'), 'info');
+			if ('abandoned' === status) {
+				// The terminal never responded and Mollie would not cancel; the
+				// server detached the attempt so a fresh Start works. Free the UI.
+				setStatus(root, t('abandoned', 'The terminal did not respond, so the payment was set aside. Start a new payment or choose another method.'), 'warning');
 				resetToIdle(root);
-			} else {
-				resetToIdle(root);
+				return;
 			}
+			setStatus(root, t('canceled', 'Payment canceled.'), 'info');
+			resetToIdle(root);
 		});
 	}
 
-	// Manual "Check Status" button: a one-off poll for support/debugging.
-	function onManualPoll(root) {
-		if (root.getAttribute('data-mtfwc-request-pending') === 'true') {
-			appendLog(root, 'warning', 'Ignoring duplicate Check Status while a request is pending.');
+	// Stop and cancel an in-flight terminal payment when the order is switched to
+	// another payment method (e.g. the customer decides to pay cash), so the poll
+	// loop stops and the Mollie payment does not linger open.
+	function currentPaymentMethod() {
+		if (!document.querySelector) {
+			return null;
+		}
+		var checked = document.querySelector('input[name="payment_method"]:checked');
+		return checked ? checked.value : null;
+	}
+
+	function onPaymentMethodChange() {
+		var method = currentPaymentMethod();
+		if (!method) {
+			// Can't tell what is selected — do nothing rather than risk canceling
+			// a live payment on a spurious event.
 			return;
 		}
-		root.setAttribute('data-mtfwc-request-pending', 'true');
-		setButtonDisabled(root, '.mtfwc-poll-payment', true);
-		postAction(root, 'mtfwc_poll_payment').then(function (result) {
-			root.setAttribute('data-mtfwc-request-pending', 'false');
-			setButtonDisabled(root, '.mtfwc-poll-payment', false);
-			if (!result || !result.ok || !result.json || !result.json.success) {
-				setStatus(root, t('checkFailed', 'Status check failed. Copy logs for support.'), 'error');
-				return;
+		var panels = document.querySelectorAll('.mtfwc-payment-interface');
+		for (var i = 0; i < panels.length; i++) {
+			var root = panels[i];
+			var gateway = root.getAttribute('data-gateway-id');
+			if (!root.mtfwcPoll || root.mtfwcCompleted) {
+				continue;
 			}
-			var status = resultStatus(result);
-			setStatus(root, 'Mollie Terminal status: ' + (status || 'ok'), 'info');
-			if ('paid' === classify(status)) {
-				completeOrder(root, resultRedirect(result));
+			if (gateway && method === gateway) {
+				// Still our method — keep polling.
+				continue;
 			}
-		});
+			stopAutoPoll(root);
+			appendLog(root, 'info', 'Payment method changed away from Mollie Terminal; canceling the terminal payment.');
+			postAction(root, 'mtfwc_cancel_payment');
+			resetToIdle(root);
+			setStatus(root, t('canceled', 'Payment canceled.'), 'info');
+		}
 	}
 
 	// --- Terminal dropdown ----------------------------------------------------
@@ -599,7 +638,8 @@
 			select.appendChild(createOption(terminal.id, label));
 		}
 		select.value = hasPreferred ? preferred : '';
-		select.disabled = false;
+		// Keep the choice frozen while a payment is in flight (e.g. resumed on load).
+		select.disabled = !!root.mtfwcPoll;
 		select.setAttribute('aria-busy', 'false');
 	}
 
@@ -628,7 +668,8 @@
 	// If the payment already reached the terminal or was paid, the server
 	// treats the cancel as a no-op, and the successful-payment redirect never
 	// triggers this (the poll session is stopped and the panel marked complete
-	// before navigating).
+	// before navigating). The server-side stale-payment sweep is the backstop
+	// for when even this beacon is lost (browser killed, network dropped).
 	function bindCancelOnLeave(root) {
 		if ('function' !== typeof window.addEventListener || !window.navigator || 'function' !== typeof window.navigator.sendBeacon) {
 			return;
@@ -709,11 +750,20 @@
 				}
 			});
 		}
-		bindClick(root, '.mtfwc-start-payment', onStart);
-		bindClick(root, '.mtfwc-poll-payment', onManualPoll);
-		bindClick(root, '.mtfwc-cancel-payment', onCancel);
+		bindClick(root, '.mtfwc-primary-action', onPrimaryAction);
 		bindCancelOnLeave(root);
 		loadTerminals(root);
+		// Resume an already-open payment on reload, otherwise show a static idle
+		// status so the cashier can see the terminal is ready before pressing Start.
+		if (root.getAttribute('data-order-id') && root.getAttribute('data-order-id') !== '0') {
+			if (root.getAttribute('data-resume') === '1') {
+				root.mtfwcCompleted = false;
+				appendLog(root, 'info', 'Resuming an open Mollie Terminal payment after page load.');
+				startAutoPoll(root);
+			} else {
+				showIdle(root);
+			}
+		}
 	}
 
 	function bindAll() {
@@ -728,9 +778,16 @@
 		bindAll();
 		if (document.body && jq) {
 			jq(document.body).on('updated_checkout', bindAll);
+			jq(document.body).on('payment_method_selected', onPaymentMethodChange);
 		}
 		if (document.body && document.body.addEventListener) {
 			document.body.addEventListener('updated_checkout', bindAll);
+			document.body.addEventListener('change', function (event) {
+				var target = event && event.target;
+				if (target && target.name === 'payment_method') {
+					onPaymentMethodChange();
+				}
+			});
 		}
 	});
 }());

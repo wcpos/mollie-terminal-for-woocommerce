@@ -18,16 +18,23 @@ This plugin starts Mollie `pointofsale` payments for in-person checkout and trea
 1. Install and activate WooCommerce.
 2. Activate this plugin.
 3. Go to WooCommerce → Settings → Payments → Mollie Terminal.
-4. Enter your Mollie **live** API key (see the note below about test mode).
+4. Choose an **API key source**: enter your Mollie **live** API key here, or
+   reuse the key already configured in the official *Mollie Payments for
+   WooCommerce* plugin (matched to the selected mode). See the note below about
+   test mode.
 5. Pick a **default terminal** from the dropdown. The list is fetched live from
    your Mollie account (inactive terminals are hidden — Mollie cannot
    reactivate them), so you no longer paste a terminal ID by hand.
 6. Optionally restrict **Enabled terminals** to the devices actually in use —
-   only those can be chosen at checkout (empty = all active terminals).
+   only those can be chosen at checkout (empty = all active terminals; the
+   default terminal is always available).
 7. Optionally enable **Lock terminal selection** so cashiers cannot change the
    terminal at checkout; the default terminal is then always used (enforced
    server-side as well).
-8. Save. The webhook URL is set automatically on every payment — no Mollie
+8. The **Checkout debug logs** setting (off by default) shows the on-panel log
+   tools; leave it off unless gathering logs for support — activity is always
+   recorded in WooCommerce → Status → Logs.
+9. Save. The webhook URL is set automatically on every payment — no Mollie
    dashboard configuration is required.
 
 You do not need to enter a Mollie **Profile ID**: it is not required for
@@ -45,6 +52,12 @@ to the configured one) and clicks **Start Terminal Payment**. The plugin then:
   (the POS-aware order-received URL, the same one the Stripe/SumUp terminal
   gateways use).
 
+The panel uses a single button that toggles between **Start Terminal Payment**
+and **Cancel Terminal Payment** while a payment is in flight. If the checkout is
+reloaded mid-payment, the panel resumes polling the open payment automatically.
+If the customer changes their mind and another payment method is selected, the
+terminal payment is stopped and canceled.
+
 ## Stale payment cleanup
 
 A Mollie `pointofsale` payment can stay "open" on the Mollie side if the flow
@@ -55,11 +68,19 @@ is abandoned. The plugin actively cancels open payments when:
 - the order is completed with a **different** payment method (customer changed
   their mind and paid cash) or the order is cancelled in WooCommerce — a
   server-side hook cancels the open Mollie payment and leaves an order note,
-- the checkout page is closed mid-payment — a best-effort cancel beacon fires.
+- the checkout page is closed mid-payment — a best-effort cancel beacon fires,
+- as a server-side backstop, a WP-Cron sweep (every 10 minutes) cancels
+  payments left open past a threshold on still-unpaid orders, covering the cases
+  where the browser is closed or the network drops before the above can fire
+  (threshold filterable via `mtfwc_stale_payment_seconds`).
 
-If the payment already reached the terminal, Mollie reports it as not
-cancelable and the cashier cancels on the device itself — these cleanups are
-safe no-ops in that case.
+If Mollie will not cancel an open payment — usually an unresponsive or
+powered-off terminal — the attempt is **abandoned locally**: the panel returns
+to idle so the cashier can start a fresh payment or pick another method without
+creating a new order, and the lingering Mollie payment is reconciled by the
+webhook or canceled by the sweep. If the payment already reached the terminal,
+the customer cancels on the device itself; these cleanups are safe no-ops in
+that case.
 
 ## Test mode limitation
 

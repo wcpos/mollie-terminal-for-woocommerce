@@ -60,6 +60,38 @@ class PaymentAttempt {
 		$order->save();
 	}
 
+	/**
+	 * Detach the current attempt from the order without touching Mollie.
+	 *
+	 * Used when a payment cannot be canceled remotely (typically an
+	 * unresponsive/offline terminal): the cashier must regain control and be
+	 * able to start a fresh payment or pick another method. The attempt is
+	 * marked "abandoned" in the history for auditability, and the current
+	 * pointer is cleared so start_payment_for_order() no longer reuses it. The
+	 * lingering Mollie payment is reconciled later by the webhook (looked up via
+	 * metadata order_id) or canceled by the stale-payment sweep.
+	 */
+	public static function abandon_current( $order ): void {
+		$payment_id = (string) $order->get_meta( self::META_CURRENT_PAYMENT_ID );
+		if ( '' !== $payment_id ) {
+			$history = self::history( $order );
+			foreach ( $history as &$attempt ) {
+				if ( ( $attempt['payment_id'] ?? '' ) === $payment_id && self::is_non_final( (string) ( $attempt['status'] ?? '' ) ) ) {
+					$attempt['status'] = 'abandoned';
+					$attempt['updated_at'] = gmdate( 'c' );
+				}
+			}
+			unset( $attempt );
+			$order->update_meta_data( self::META_ATTEMPTS, $history );
+		}
+		$order->delete_meta_data( self::META_CURRENT_ATTEMPT_ID );
+		$order->delete_meta_data( self::META_CURRENT_PAYMENT_ID );
+		$order->delete_meta_data( self::META_CURRENT_TERMINAL_ID );
+		$order->delete_meta_data( self::META_CURRENT_PAYMENT_STATUS );
+		$order->delete_meta_data( self::META_CURRENT_PAYMENT_CREATED_AT );
+		$order->save();
+	}
+
 	public static function history( $order ): array {
 		$history = $order->get_meta( self::META_ATTEMPTS );
 		return is_array( $history ) ? $history : array();
