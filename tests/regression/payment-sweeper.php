@@ -40,8 +40,15 @@ class FakeOrderForSweeper {
 
 class CountingCancelService extends MolliePaymentService {
 	public $cancel_calls = 0;
+	public $abandoned_calls = 0;
+	public $abandoned_result = array( 'tr_abandoned' => 'canceled' );
 	public function __construct() {}
 	public function cancel_order_payment( $order ): array { $this->cancel_calls++; return array( 'status' => 'canceled' ); }
+	public function cancel_abandoned_payments( $order ): array {
+		if ( empty( PaymentAttempt::abandoned( $order ) ) ) { return array(); }
+		$this->abandoned_calls++;
+		return $this->abandoned_result;
+	}
 }
 
 function make_sweeper_order( string $status, int $age_seconds, bool $paid = false ): FakeOrderForSweeper {
@@ -81,5 +88,31 @@ $order = make_sweeper_order( 'canceled', 20 * MINUTE_IN_SECONDS );
 expect( false === $sweeper->sweep_order( $order ), 'a final attempt must not be swept' );
 
 expect( 1 === $service->cancel_calls, 'only the one stale open payment should have been canceled' );
+expect( 0 === $service->abandoned_calls, 'orders without abandoned payments must not hit the abandoned path' );
+
+// An abandoned payment has no current-attempt pointer, but it is still open at
+// Mollie: the sweep must find it via META_ABANDONED_PAYMENT_IDS and resolve it.
+$order = make_sweeper_order( '', 0 );
+$order->meta[ PaymentAttempt::META_ABANDONED_PAYMENT_IDS ] = array( 'tr_abandoned' );
+expect( true === $sweeper->sweep_order( $order ), 'an abandoned payment should be swept' );
+expect( 1 === $service->abandoned_calls, 'the sweep should resolve the abandoned payment' );
+expect( 1 === $service->cancel_calls, 'an order without a current attempt needs no current-attempt cancel' );
+expect( ! empty( $order->notes ), 'resolving an abandoned payment should leave an order note' );
+
+// A paid order still gets its abandoned payments chased: the customer may have
+// paid in cash while the terminal payment stayed open at Mollie.
+$order = make_sweeper_order( '', 0, true );
+$order->meta[ PaymentAttempt::META_ABANDONED_PAYMENT_IDS ] = array( 'tr_abandoned' );
+expect( true === $sweeper->sweep_order( $order ), 'a paid order with an abandoned payment should be swept' );
+expect( 2 === $service->abandoned_calls, 'the abandoned payment is resolved even on a paid order' );
+expect( 1 === $service->cancel_calls, 'a paid order must not have its current attempt canceled' );
+
+// A still-open abandoned payment leaves no note (nothing was resolved yet) but
+// still counts as swept so the next run retries it.
+$order = make_sweeper_order( '', 0 );
+$order->meta[ PaymentAttempt::META_ABANDONED_PAYMENT_IDS ] = array( 'tr_abandoned' );
+$service->abandoned_result = array( 'tr_abandoned' => 'still_open' );
+expect( true === $sweeper->sweep_order( $order ), 'a still-open abandoned payment counts as swept' );
+expect( empty( $order->notes ), 'an unresolved abandoned payment must not spam order notes' );
 
 echo "payment-sweeper ok\n";

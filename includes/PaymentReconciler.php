@@ -11,6 +11,11 @@ class PaymentReconciler {
 		$verification = $this->verify_payment( $order, $payment );
 		$status = (string) ( $payment['status'] ?? 'unknown' );
 		PaymentAttempt::update_status( $order, $payment );
+		// Whatever resolved it — webhook, poll, cancel or the stale sweep — a
+		// payment in a final state no longer needs the sweep to chase it.
+		if ( PaymentAttempt::is_final( $status ) ) {
+			PaymentAttempt::forget_abandoned( $order, PaymentAttempt::payment_id( $payment ) );
+		}
 		if ( ! $verification['valid'] ) {
 			$order->add_order_note( sprintf( 'Mollie Terminal payment verification failed via %s: %s', $source, implode( '; ', $verification['errors'] ) ) );
 			$order->save();

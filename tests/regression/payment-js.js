@@ -309,7 +309,29 @@ async function flush() {
 	assert(!methodPanel.mtfwcPoll, 'switching payment method stops the poll loop');
 	assert.strictEqual(fetchCalls.length, fetchesBeforeSwitch + 1, 'switching payment method fires a cancel request');
 	assert.strictEqual(lastAction(), 'mtfwc_cancel_payment', 'switching payment method cancels the terminal payment');
+	// The cancel is still in flight: nothing may claim the payment was canceled yet.
+	assert(!/canceled/i.test(methodPanel.querySelector('.mtfwc-payment-status').textContent), 'the panel must wait for the cancel response before reporting a cancelation');
 	await resolveNext({ status: 'canceled' });
+	assert(/canceled/i.test(methodPanel.querySelector('.mtfwc-payment-status').textContent), 'a confirmed cancel reports the payment as canceled');
+
+	// Race: the terminal approves at the very moment the cashier switches method.
+	// The server reconciles the order as paid and answers the cancel with a
+	// redirect URL — the panel must finish the order, not say "canceled".
+	const raceUrl = 'https://example.test/wcpos-checkout/order-received/987?key=wc_order_race';
+	const racePanel = makePanel('1010');
+	panels.push(racePanel);
+	jqueryHandlers.updated_checkout();
+	await resolveNext({ terminals: [{ id: 'term_default', label: 'Back office', status: 'active' }], default_terminal_id: 'term_default' });
+	racePanel.querySelector('.mtfwc-primary-action').click();
+	await resolveNext({ status: 'created' });
+	checkedPaymentMethod = 'cod';
+	firePaymentMethodChange();
+	await flush();
+	assert.strictEqual(lastAction(), 'mtfwc_cancel_payment', 'the method switch fires the cancel');
+	await resolveNext({ status: 'paid', redirect_url: raceUrl });
+	assert.strictEqual(context.window.location.href, raceUrl, 'a cancel that comes back paid should complete the order');
+	assert.strictEqual(racePanel.mtfwcCompleted, true, 'the panel is marked complete when the cancel reconciled as paid');
+	assert(!/canceled/i.test(racePanel.querySelector('.mtfwc-payment-status').textContent), 'a paid order must never be reported as canceled');
 	checkedPaymentMethod = 'mollie_terminal_for_woocommerce';
 
 	// Checkout refresh binds new panels exactly once.

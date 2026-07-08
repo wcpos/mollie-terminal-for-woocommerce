@@ -37,10 +37,15 @@ class FakeOrderForAbandon {
 	public $meta = array();
 	public $notes = array();
 	public $saved = false;
-	public function is_paid() { return false; }
+	public $paid = false;
+	public $transaction_id = '';
+	public function is_paid() { return $this->paid; }
 	public function get_id() { return 5555; }
 	public function get_total() { return '0.01'; }
 	public function get_currency() { return 'EUR'; }
+	public function get_transaction_id() { return $this->transaction_id; }
+	public function set_transaction_id( $id ) { $this->transaction_id = $id; }
+	public function payment_complete( $id ) { $this->paid = true; }
 	public function get_meta( $key ) { return $this->meta[ $key ] ?? null; }
 	public function update_meta_data( $key, $value ) { $this->meta[ $key ] = $value; }
 	public function delete_meta_data( $key ) { unset( $this->meta[ $key ] ); }
@@ -80,6 +85,9 @@ expect( null === PaymentAttempt::current( $order ), 'abandon must detach the cur
 expect( ! empty( $order->notes ), 'abandon should leave an order note' );
 $history = PaymentAttempt::history( $order );
 expect( 'abandoned' === ( $history[0]['status'] ?? '' ), 'the attempt should be marked abandoned in history' );
+// The payment is still open at Mollie: keep its ID where the stale sweep looks,
+// otherwise clearing the current pointer hides it from the WP-Cron backstop.
+expect( array( 'tr_open' ) === PaymentAttempt::abandoned( $order ), 'abandon must park the payment ID for the stale sweep' );
 
 // Case 2: terminal was off but payment still cancelable -> Mollie cancels it.
 $order  = seed_order();
@@ -101,5 +109,43 @@ $result = ( new MolliePaymentService( $client, $settings, $terminals ) )->cancel
 expect( 1 === $client->cancel_calls, 'the cancel should be attempted once' );
 expect( 'abandoned' === ( $result['status'] ?? '' ), 'a payment still open after cancel should be abandoned' );
 expect( null === PaymentAttempt::current( $order ), 'a stuck-open payment should be detached' );
+expect( array( 'tr_open' ) === PaymentAttempt::abandoned( $order ), 'a stuck-open payment stays visible to the sweep' );
+
+// Case 4: the sweep retries an abandoned payment; Mollie now cancels it, so the
+// ID is dropped and the order stops being chased.
+$order = seed_order();
+$order->meta[ PaymentAttempt::META_ABANDONED_PAYMENT_IDS ] = array( 'tr_open' );
+unset( $order->meta[ PaymentAttempt::META_CURRENT_PAYMENT_ID ] );
+$client = new ScriptedMollieClient( array(
+	array( 'id' => 'tr_open', 'status' => 'open', 'isCancelable' => true ),
+	array( 'id' => 'tr_open', 'status' => 'canceled', 'amount' => array( 'value' => '0.01', 'currency' => 'EUR' ), 'method' => 'pointofsale', 'mode' => 'live', 'metadata' => array( 'order_id' => '5555' ) ),
+) );
+$results = ( new MolliePaymentService( $client, $settings, $terminals ) )->cancel_abandoned_payments( $order );
+expect( 1 === $client->cancel_calls, 'the sweep should cancel an abandoned payment Mollie still allows canceling' );
+expect( 'canceled' === ( $results['tr_open'] ?? '' ), 'the abandoned payment should resolve as canceled' );
+expect( array() === PaymentAttempt::abandoned( $order ), 'a finalized abandoned payment is dropped from the sweep list' );
+
+// Case 5: the terminal approved after all — the sweep completes the order rather
+// than leaving the money unreconciled.
+$order = seed_order();
+$order->meta[ PaymentAttempt::META_ABANDONED_PAYMENT_IDS ] = array( 'tr_open' );
+unset( $order->meta[ PaymentAttempt::META_CURRENT_PAYMENT_ID ] );
+$client = new ScriptedMollieClient( array(
+	array( 'id' => 'tr_open', 'status' => 'paid', 'amount' => array( 'value' => '0.01', 'currency' => 'EUR' ), 'method' => 'pointofsale', 'mode' => 'live', 'metadata' => array( 'order_id' => '5555' ) ),
+) );
+$results = ( new MolliePaymentService( $client, $settings, $terminals ) )->cancel_abandoned_payments( $order );
+expect( 0 === $client->cancel_calls, 'a paid abandoned payment must never be canceled' );
+expect( 'paid' === ( $results['tr_open'] ?? '' ), 'a paid abandoned payment should resolve as paid' );
+expect( $order->paid, 'a paid abandoned payment should complete the order' );
+expect( array() === PaymentAttempt::abandoned( $order ), 'a paid abandoned payment is dropped from the sweep list' );
+
+// Case 6: Mollie still refuses to cancel — keep the ID so the next sweep retries.
+$order = seed_order();
+$order->meta[ PaymentAttempt::META_ABANDONED_PAYMENT_IDS ] = array( 'tr_open' );
+unset( $order->meta[ PaymentAttempt::META_CURRENT_PAYMENT_ID ] );
+$client = new ScriptedMollieClient( array( array( 'id' => 'tr_open', 'status' => 'open', 'isCancelable' => false ) ) );
+$results = ( new MolliePaymentService( $client, $settings, $terminals ) )->cancel_abandoned_payments( $order );
+expect( 'still_open' === ( $results['tr_open'] ?? '' ), 'a non-cancelable abandoned payment stays open' );
+expect( array( 'tr_open' ) === PaymentAttempt::abandoned( $order ), 'a still-open abandoned payment must be retried next sweep' );
 
 echo "payment-abandon ok\n";

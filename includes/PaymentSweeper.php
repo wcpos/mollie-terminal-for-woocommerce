@@ -62,17 +62,19 @@ class PaymentSweeper {
 
 	public function sweep(): void {
 		if ( ! function_exists( 'wc_get_orders' ) ) { return; }
-		$orders = wc_get_orders(
-			array(
-				'limit'      => (int) apply_filters( 'mtfwc_stale_payment_batch', 25 ),
-				'status'     => array( 'pending', 'failed' ),
-				'orderby'    => 'date',
-				'order'      => 'ASC',
-				'meta_query' => array(
-					array( 'key' => PaymentAttempt::META_CURRENT_PAYMENT_ID, 'compare' => 'EXISTS' ),
-				),
-			)
-		);
+		$limit = (int) apply_filters( 'mtfwc_stale_payment_batch', 25 );
+		$orders = array();
+		// Orders whose current attempt may have gone stale in the browser.
+		foreach ( $this->find_orders( array( 'pending', 'failed' ), PaymentAttempt::META_CURRENT_PAYMENT_ID, $limit ) as $order ) {
+			$orders[ (int) $order->get_id() ] = $order;
+		}
+		// Orders holding a payment that was abandoned locally while still open at
+		// Mollie. Their current-attempt pointer is gone, so the query above cannot
+		// see them, and their status is irrelevant: the order may since have been
+		// paid in cash or cancelled while the payment stayed open.
+		foreach ( $this->find_orders( 'any', PaymentAttempt::META_ABANDONED_PAYMENT_IDS, $limit ) as $order ) {
+			$orders[ (int) $order->get_id() ] = $order;
+		}
 		if ( empty( $orders ) ) { return; }
 		$swept = 0;
 		foreach ( $orders as $order ) {
@@ -83,18 +85,38 @@ class PaymentSweeper {
 		}
 	}
 
+	/** @param string|array $status */
+	private function find_orders( $status, string $meta_key, int $limit ): array {
+		$orders = wc_get_orders(
+			array(
+				'limit'      => $limit,
+				'status'     => $status,
+				'orderby'    => 'date',
+				'order'      => 'ASC',
+				'meta_query' => array(
+					array( 'key' => $meta_key, 'compare' => 'EXISTS' ),
+				),
+			)
+		);
+		return is_array( $orders ) ? $orders : array();
+	}
+
 	/**
 	 * Cancel one order's stale open payment if it qualifies. Returns true when a
 	 * cancel/abandon was attempted. Kept separate from the DB query so it can be
 	 * unit-tested with a plain fake order.
 	 */
 	public function sweep_order( $order ): bool {
-		if ( ! $order || $order->is_paid() ) { return false; }
+		if ( ! $order ) { return false; }
+		// Abandoned payments first: resolving one can complete the order, in which
+		// case there is no stale current attempt left worth canceling.
+		$swept = $this->sweep_abandoned( $order );
+		if ( $order->is_paid() ) { return $swept; }
 		$current = PaymentAttempt::current( $order );
-		if ( ! $current || empty( $current['payment_id'] ) ) { return false; }
-		if ( ! PaymentAttempt::is_non_final( (string) ( $current['status'] ?? '' ) ) ) { return false; }
+		if ( ! $current || empty( $current['payment_id'] ) ) { return $swept; }
+		if ( ! PaymentAttempt::is_non_final( (string) ( $current['status'] ?? '' ) ) ) { return $swept; }
 		$created = strtotime( (string) ( $current['created_at'] ?? '' ) );
-		if ( ! $created || ( time() - $created ) < self::stale_threshold() ) { return false; }
+		if ( ! $created || ( time() - $created ) < self::stale_threshold() ) { return $swept; }
 		Logger::log( 'Sweeping stale open Mollie terminal payment.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'] ), 'info' );
 		try {
 			$result = $this->service()->cancel_order_payment( $order );
@@ -102,6 +124,27 @@ class PaymentSweeper {
 			$order->save();
 		} catch ( Exception $e ) {
 			Logger::log( 'Stale-payment sweep failed for order: ' . $e->getMessage(), array( 'order_id' => (int) $order->get_id() ), 'error' );
+		}
+		return true;
+	}
+
+	/**
+	 * Retry the payments that cancel_order_payment() had to abandon locally: they
+	 * are still open at Mollie until it cancels or expires them, or until the
+	 * terminal reports that the customer paid after all.
+	 */
+	private function sweep_abandoned( $order ): bool {
+		if ( empty( PaymentAttempt::abandoned( $order ) ) ) { return false; }
+		Logger::log( 'Sweeping abandoned Mollie terminal payments.', array( 'order_id' => (int) $order->get_id(), 'payment_ids' => PaymentAttempt::abandoned( $order ) ), 'info' );
+		try {
+			$results = $this->service()->cancel_abandoned_payments( $order );
+			foreach ( $results as $payment_id => $outcome ) {
+				if ( 'still_open' === $outcome ) { continue; }
+				$order->add_order_note( sprintf( 'Mollie Terminal: abandoned payment %s resolved by automatic cleanup (result: %s).', $payment_id, $outcome ) );
+			}
+			$order->save();
+		} catch ( Exception $e ) {
+			Logger::log( 'Abandoned-payment sweep failed for order: ' . $e->getMessage(), array( 'order_id' => (int) $order->get_id() ), 'error' );
 		}
 		return true;
 	}

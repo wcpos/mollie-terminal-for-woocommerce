@@ -573,12 +573,45 @@
 				// Still our method — keep polling.
 				continue;
 			}
-			stopAutoPoll(root);
-			appendLog(root, 'info', 'Payment method changed away from Mollie Terminal; canceling the terminal payment.');
-			postAction(root, 'mtfwc_cancel_payment');
-			resetToIdle(root);
-			setStatus(root, t('canceled', 'Payment canceled.'), 'info');
+			cancelAfterMethodSwitch(root);
 		}
+	}
+
+	// The cashier can switch method in the same moment the terminal approves the
+	// payment: the server then reconciles the order as paid and answers the cancel
+	// with "paid" plus a redirect URL. Dropping that response would strand a paid
+	// order on another payment method, so handle it exactly as onCancel() does.
+	function cancelAfterMethodSwitch(root) {
+		var seqAtSwitch = root.mtfwcPollSeq;
+		stopAutoPoll(root);
+		appendLog(root, 'info', 'Payment method changed away from Mollie Terminal; canceling the terminal payment.');
+		setActionButtonsDisabled(root, true);
+		setStatus(root, t('contacting', 'Contacting Mollie Terminal…'), 'info');
+		postAction(root, 'mtfwc_cancel_payment').then(function (result) {
+			// The cashier may have switched back and started a fresh payment while
+			// this cancel was in flight — leave that attempt's UI alone.
+			if (root.mtfwcPoll || root.mtfwcCompleted || root.mtfwcPollSeq !== seqAtSwitch) {
+				return;
+			}
+			if (!result || !result.ok || !result.json || !result.json.success) {
+				setStatus(root, t('requestFailed', 'Mollie Terminal request failed. Copy logs for support.'), 'error');
+				resetToIdle(root);
+				return;
+			}
+			var status = resultStatus(result);
+			if ('paid' === classify(status)) {
+				// Paid after all — finish the order rather than claim it was canceled.
+				completeOrder(root, resultRedirect(result));
+				return;
+			}
+			if ('abandoned' === status) {
+				setStatus(root, t('abandoned', 'The terminal did not respond, so the payment was set aside. Start a new payment or choose another method.'), 'warning');
+				resetToIdle(root);
+				return;
+			}
+			setStatus(root, t('canceled', 'Payment canceled.'), 'info');
+			resetToIdle(root);
+		});
 	}
 
 	// --- Terminal dropdown ----------------------------------------------------

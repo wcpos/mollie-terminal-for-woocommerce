@@ -9,6 +9,8 @@ All notable changes to Mollie Terminal for WooCommerce will be documented in thi
 - Cashiers are no longer trapped when a terminal is off or unresponsive. If Mollie will not cancel the open payment, the attempt is now abandoned locally: the panel returns to idle so a fresh payment (on the same or a different terminal) can be started without creating a new order. Previously the panel kept polling and the stuck payment was reused on the next Start.
 - Refreshing the checkout mid-payment no longer drops the cashier back to an idle panel — the panel now resumes polling the open payment on page load.
 - Added a server-side stale-payment sweep (WP-Cron, every 10 minutes) that cancels payments left open past a threshold on still-payable orders — the backstop for when the browser is closed or the network drops before the auto-cancel or cancel-beacon can fire. Threshold is filterable via `mtfwc_stale_payment_seconds`.
+- A payment abandoned locally (terminal unresponsive) is no longer invisible to the stale-payment sweep. Its ID is kept on the order, so the sweep keeps retrying the cancel until Mollie accepts it — or completes the order if the terminal turns out to have taken the payment. Previously such a payment could stay open at Mollie indefinitely.
+- Switching payment method at the exact moment the terminal approves the payment no longer strands a paid order on another method. The panel now waits for the cancel response and finishes the order when the server reports it as paid, instead of reporting "Payment canceled".
 
 ### Changed
 
