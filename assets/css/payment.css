@@ -229,18 +229,44 @@
 	color: #fff !important;
 }
 
+/* The QR must be a large, square, centred block. WooCommerce and POS themes
+   style <img> inside the payment box for tiny method icons (inline, floated,
+   height-capped), which squashed the QR into a strip beside its caption —
+   so every dimension is pinned here, not left to the image attributes. */
 #mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-qr-code {
+	display: block !important;
+	float: none !important;
 	margin: .875rem 0 0 !important;
 	text-align: center !important;
 }
 
 #mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-qr-image {
-	display: inline-block !important;
-	max-width: 240px !important;
+	display: block !important;
+	float: none !important;
+	position: static !important;
+	box-sizing: border-box !important;
+	width: 258px !important; /* 240px code + .5rem padding and 1px border each side */
 	height: auto !important;
+	max-width: 100% !important;
+	max-height: none !important;
+	min-height: 0 !important;
+	aspect-ratio: 1 / 1 !important;
+	object-fit: contain !important;
+	margin: 0 auto !important;
 	padding: .5rem !important;
 	border: 1px solid #e2e8f0 !important;
+	border-radius: 6px !important;
 	background: #fff !important;
+	box-shadow: none !important;
+	vertical-align: top !important;
+	image-rendering: pixelated;
+}
+
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-qr-code .mtfwc-payment-help {
+	display: block !important;
+	float: none !important;
+	margin: .5rem 0 0 !important;
+	text-align: center !important;
 }
 
 /* The status line is the cashier's main feedback — render it as a banner. */
