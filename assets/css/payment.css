@@ -244,8 +244,8 @@
 	display: block !important;
 	float: none !important;
 	position: static !important;
-	box-sizing: content-box !important;
-	width: 240px !important;
+	box-sizing: border-box !important;
+	width: 258px !important; /* 240px code + .5rem padding and 1px border each side */
 	height: auto !important;
 	max-width: 100% !important;
 	max-height: none !important;
