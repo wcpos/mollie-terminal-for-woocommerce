@@ -40,6 +40,8 @@ class Settings {
 		return trim( (string) get_option( $option, '' ) );
 	}
 
+	/** Whether the merchant has the gateway switched on in WooCommerce → Payments. */
+	public function enabled(): bool { return 'yes' === $this->get( 'enabled', 'no' ); }
 	public function api_key_source(): string { return 'mollie' === $this->get( 'api_key_source', 'own' ) ? 'mollie' : 'own'; }
 	public function profile_id(): string { return (string) $this->get( 'profile_id', '' ); }
 	public function mode(): string { return 'live' === $this->get( 'mode', 'test' ) ? 'live' : 'test'; }

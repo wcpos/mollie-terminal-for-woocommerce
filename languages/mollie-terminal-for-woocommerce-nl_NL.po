@@ -330,6 +330,10 @@ msgstr "— Selecteer een terminal —"
 msgid "QR code payments are not enabled for this method."
 msgstr "QR-codebetalingen zijn niet ingeschakeld voor deze methode."
 
+#: includes/AjaxHandler.php:128
+msgid "Mollie Terminal is disabled."
+msgstr "Mollie Terminal is uitgeschakeld."
+
 #: includes/Gateway.php:52
 msgid "QR code payments"
 msgstr "QR-codebetalingen"

@@ -2,6 +2,12 @@
 
 All notable changes to Mollie Terminal for WooCommerce will be documented in this file.
 
+## 0.5.1 - 2026-09-03
+
+### Fixed
+
+- Starting a payment and listing terminals now refuse to act when the gateway is switched off in WooCommerce → Payments. Previously a cashier, or anyone holding a still-valid order token, could start a Mollie payment for an unpaid order after the merchant disabled the gateway (#12). Poll, cancel and the webhook are unchanged, so a payment already in flight still settles and can still be canceled from the panel.
+
 ## 0.5.0 - 2026-09-03
 
 ### Added
