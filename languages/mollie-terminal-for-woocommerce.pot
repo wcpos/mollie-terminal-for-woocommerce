@@ -2,7 +2,7 @@
 # This file is distributed under the GPL v3 or later.
 msgid ""
 msgstr ""
-"Project-Id-Version: Mollie Terminal for WooCommerce 0.4.0\n"
+"Project-Id-Version: Mollie Terminal for WooCommerce 0.5.0\n"
 "Report-Msgid-Bugs-To: https://github.com/wcpos/mollie-terminal-for-woocommerce/issues\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -254,7 +254,7 @@ msgid "Test"
 msgstr ""
 
 #: includes/Gateway.php:160
-msgid "Test mode is selected. Mollie terminals exist only on live accounts, so the test API key cannot drive a physical terminal. Switch to Live mode with your live API key to take terminal payments."
+msgid "Test mode is selected. Mollie terminals exist only on live accounts, so the test API key cannot drive a physical terminal. Switch to Live mode with your live API key to take terminal payments. iDEAL QR payments do work in test mode."
 msgstr ""
 
 #: includes/Gateway.php:321 includes/Services/MolliePaymentService.php:121
@@ -262,7 +262,7 @@ msgid "The terminal did not respond, so the payment was set aside. Start a new p
 msgstr ""
 
 #: includes/Gateway.php:365
-msgid "This order has not been paid on the terminal yet. Use “Start Terminal Payment” above and wait for the terminal to confirm — the order finishes on its own. If you have already paid, give it a few seconds and try again."
+msgid "This order has not been paid yet. Start the payment above and wait for Mollie to confirm — the order finishes on its own. If the customer has already paid, give it a few seconds and try again."
 msgstr ""
 
 #: includes/Gateway.php:324
@@ -321,3 +321,71 @@ msgstr ""
 msgid "— Select a terminal —"
 msgstr ""
 
+
+#: includes/AjaxHandler.php:26
+msgid "QR code payments are not enabled for this method."
+msgstr ""
+
+#: includes/Gateway.php:52
+msgid "QR code payments"
+msgstr ""
+
+#: includes/Gateway.php:55 includes/Gateway.php:274
+msgid "iDEAL"
+msgstr ""
+
+#: includes/Gateway.php:55 includes/Gateway.php:274
+msgid "Bancontact"
+msgstr ""
+
+#: includes/Gateway.php:57
+msgid "Let cashiers show a QR code on screen that the customer scans with their banking app. The method must be active on your Mollie profile. iDEAL QR also works in test mode, so it can be tried without a terminal."
+msgstr ""
+
+#: includes/Gateway.php:244
+msgid "Send this order to a Mollie terminal, or show a QR code for the customer to scan. The payment completes automatically once Mollie confirms."
+msgstr ""
+
+#: includes/Gateway.php:248
+msgid "Payment channel"
+msgstr ""
+
+#: includes/Gateway.php:250
+msgid "QR code"
+msgstr ""
+
+#: includes/Gateway.php:273
+msgid "Payment method"
+msgstr ""
+
+#: includes/Gateway.php:289 includes/Gateway.php:358
+msgid "Cancel QR payment"
+msgstr ""
+
+#: includes/Gateway.php:296
+msgid "Payment QR code"
+msgstr ""
+
+#: includes/Gateway.php:297
+msgid "Ask the customer to scan this with their banking app."
+msgstr ""
+
+#: includes/Gateway.php:357
+msgid "Show QR code"
+msgstr ""
+
+#: includes/Gateway.php:361
+msgid "Creating QR code…"
+msgstr ""
+
+#: includes/Gateway.php:363
+msgid "Waiting for the customer to scan…"
+msgstr ""
+
+#: includes/Gateway.php:364
+msgid "Scanned — waiting for the bank to confirm…"
+msgstr ""
+
+#: includes/Gateway.php:364
+msgid "Mollie did not return a QR code. Try again or use the terminal."
+msgstr ""

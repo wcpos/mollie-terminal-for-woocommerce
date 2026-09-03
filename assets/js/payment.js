@@ -108,6 +108,10 @@
 		if (Object.prototype.hasOwnProperty.call(data, 'reused')) {
 			summary.reused = data.reused;
 		}
+		if (data.qr_code) {
+			// Never log the src: a data URI QR is large and useless in support logs.
+			summary.qr_code = true;
+		}
 		if (data.message) {
 			summary.message = data.message;
 		}
@@ -182,6 +186,22 @@
 		return root.getAttribute('data-default-terminal-id') || getData().defaultTerminalId || '';
 	}
 
+	function selectedChannel(root) {
+		var channels = root.querySelectorAll('.mtfwc-channel');
+		for (var i = 0; i < channels.length; i++) {
+			if (channels[i].getAttribute('aria-pressed') === 'true' && channels[i].getAttribute('data-channel') === 'qr') {
+				return 'qr';
+			}
+		}
+		return 'terminal';
+	}
+
+	function selectedQrMethod(root) {
+		var select = root.querySelector('.mtfwc-qr-method-select');
+		var single = root.querySelector('.mtfwc-qr-method-single');
+		return select ? select.value : (single ? single.getAttribute('data-method') || '' : '');
+	}
+
 	// Low-level AJAX call: logs the request/response but does not touch the
 	// status line or button state, so it is safe to reuse from the poll loop.
 	function postAction(root, action, extra) {
@@ -251,6 +271,10 @@
 		return '';
 	}
 
+	function resultQrCode(result) {
+		return result && result.json && result.json.data ? result.json.data.qr_code || null : null;
+	}
+
 	// Map a raw Mollie/reconciler status onto the flow's outcome buckets.
 	function classify(status) {
 		if ('paid' === status || 'already_paid' === status || 'conflict' === status) {
@@ -274,8 +298,8 @@
 		}
 		button.setAttribute('data-mtfwc-mode', mode);
 		button.textContent = 'cancel' === mode
-			? t('cancelAction', 'Cancel Terminal Payment')
-			: t('startAction', 'Start Terminal Payment');
+			? ('qr' === selectedChannel(root) ? t('cancelQrAction', 'Cancel QR payment') : t('cancelAction', 'Cancel Terminal Payment'))
+			: ('qr' === selectedChannel(root) ? t('startQrAction', 'Show QR code') : t('startAction', 'Start Terminal Payment'));
 	}
 
 	function actionMode(root) {
@@ -303,6 +327,15 @@
 	// skipped for locked panels and for selects that are unavailable (no
 	// terminals) or still loading.
 	function setSelectDisabled(root, disabled) {
+		var qrSelect = root.querySelector('.mtfwc-qr-method-select');
+		var channels = root.querySelectorAll('.mtfwc-channel');
+		var i;
+		if (qrSelect) {
+			qrSelect.disabled = disabled;
+		}
+		for (i = 0; i < channels.length; i++) {
+			channels[i].disabled = disabled;
+		}
 		var select = root.querySelector('.mtfwc-terminal-select');
 		if (!select) {
 			return;
@@ -318,7 +351,88 @@
 	}
 
 	function showIdle(root) {
+		hideQr(root);
 		setStatus(root, t('idle', 'Mollie Terminal status: idle'), 'info');
+	}
+
+	function showQr(root, qr) {
+		var block = root.querySelector('.mtfwc-qr-code');
+		var image = root.querySelector('.mtfwc-qr-image');
+		if (!block || !image || !qr || !qr.src) {
+			return false;
+		}
+		if ('qr' !== selectedChannel(root)) {
+			selectChannel(root, 'qr');
+		}
+		// Every poll tick carries the same QR; only touch the image when it
+		// actually changes so the browser does not re-decode it every 2s.
+		if (image.getAttribute('src') !== qr.src) {
+			image.setAttribute('src', qr.src);
+			if (qr.width > 0 && qr.height > 0) {
+				image.setAttribute('width', qr.width);
+				image.setAttribute('height', qr.height);
+			} else {
+				image.removeAttribute('width');
+				image.removeAttribute('height');
+			}
+		}
+		block.hidden = false;
+		return true;
+	}
+
+	function hideQr(root) {
+		var block = root.querySelector('.mtfwc-qr-code');
+		var image = root.querySelector('.mtfwc-qr-image');
+		if (image) {
+			image.setAttribute('src', '');
+			image.removeAttribute('width');
+			image.removeAttribute('height');
+		}
+		if (block) {
+			block.hidden = true;
+		}
+	}
+
+	function hasQr(root) {
+		var image = root.querySelector('.mtfwc-qr-image');
+		return !!(image && image.getAttribute('src'));
+	}
+
+	function selectChannel(root, channel) {
+		var channels = root.querySelectorAll('.mtfwc-channel');
+		var terminalField = root.querySelector('.mtfwc-terminal-field');
+		var qrField = root.querySelector('.mtfwc-qr-field');
+		if (!channels.length) {
+			return;
+		}
+		channel = 'qr' === channel ? 'qr' : 'terminal';
+		for (var i = 0; i < channels.length; i++) {
+			channels[i].setAttribute('aria-pressed', channels[i].getAttribute('data-channel') === channel ? 'true' : 'false');
+		}
+		if (terminalField) {
+			terminalField.hidden = 'qr' === channel;
+		}
+		if (qrField) {
+			qrField.hidden = 'qr' !== channel;
+		}
+		hideQr(root);
+		setActionMode(root, actionMode(root));
+	}
+
+	// Align the panel with the channel/method the server actually started or
+	// reused, so a reused terminal attempt is never presented as a QR payment.
+	function syncChannel(root, result) {
+		var data = result && result.json ? result.json.data : null;
+		var select = root.querySelector('.mtfwc-qr-method-select');
+		if (!data || !data.channel) {
+			return;
+		}
+		if (data.channel !== selectedChannel(root)) {
+			selectChannel(root, data.channel);
+		}
+		if (select && 'qr' === data.channel && data.method && select.value !== data.method) {
+			select.value = data.method;
+		}
 	}
 
 	// --- Auto-poll loop -------------------------------------------------------
@@ -342,7 +456,7 @@
 		root.mtfwcPoll = { deadline: nowMs() + timeout, timer: null, id: root.mtfwcPollSeq };
 		setBusy(root, true);
 		setSelectDisabled(root, true);
-		setStatus(root, t('waiting', 'Waiting for terminal…'), 'info');
+		setStatus(root, 'qr' === selectedChannel(root) ? t('waitingQr', 'Waiting for the customer to scan…') : t('waiting', 'Waiting for terminal…'), 'info');
 		setActionMode(root, 'cancel');
 		setButtonDisabled(root, '.mtfwc-primary-action', false);
 		schedulePoll(root, interval);
@@ -364,6 +478,7 @@
 		var session = root.mtfwcPoll.id;
 		if (nowMs() > root.mtfwcPoll.deadline) {
 			stopAutoPoll(root);
+			hideQr(root);
 			// Don't leave the payment lingering "open" on the Mollie side —
 			// after the timeout, actively cancel it.
 			var seqAtTimeout = root.mtfwcPollSeq;
@@ -394,7 +509,16 @@
 			if (!root.mtfwcPoll || root.mtfwcPoll.id !== session) {
 				return;
 			}
-			var outcome = classify(resultStatus(result));
+			var status = resultStatus(result);
+			var qr = resultQrCode(result);
+			// Mollie only returns the QR while the payment is "open". Once the
+			// customer has scanned (pending/authorized) the code is spent — drop it
+			// so the cashier does not keep asking them to scan.
+			if (!qr && 'open' !== status) {
+				hideQr(root);
+			}
+			var qrShown = showQr(root, qr);
+			var outcome = classify(status);
 			if ('paid' === outcome) {
 				completeOrder(root, resultRedirect(result));
 			} else if ('failed' === outcome) {
@@ -406,7 +530,15 @@
 				showIdle(root);
 				resetToIdle(root);
 			} else {
-				setStatus(root, t('waiting', 'Waiting for terminal…'), 'info');
+				if ('qr' !== selectedChannel(root)) {
+					setStatus(root, t('waiting', 'Waiting for terminal…'), 'info');
+				} else if ('open' !== status) {
+					setStatus(root, t('confirmingQr', 'Scanned — waiting for the bank to confirm…'), 'info');
+				} else if (qrShown || hasQr(root)) {
+					setStatus(root, t('waitingQr', 'Waiting for the customer to scan…'), 'info');
+				} else {
+					setStatus(root, t('qrUnavailable', 'Mollie did not return a QR code. Try again or use the terminal.'), 'error');
+				}
 				schedulePoll(root, interval);
 			}
 		});
@@ -416,6 +548,7 @@
 	// and the primary button flipped back to "Start". Callers set their own
 	// status message (e.g. "canceled", "failed") around this as appropriate.
 	function resetToIdle(root) {
+		hideQr(root);
 		setBusy(root, false);
 		setSelectDisabled(root, false);
 		setActionMode(root, 'start');
@@ -429,6 +562,7 @@
 	// form-submit chain remains as a fallback when no redirect URL is known.
 	function completeOrder(root, redirectUrl) {
 		stopAutoPoll(root);
+		hideQr(root);
 		setStatus(root, t('completing', 'Payment complete — finishing order…'), 'success');
 		appendLog(root, 'success', 'Terminal payment complete; finishing order.', { redirect: !!redirectUrl });
 		if (root.mtfwcCompleted) {
@@ -478,8 +612,10 @@
 			appendLog(root, 'warning', 'Ignoring duplicate Start while a request is pending.');
 			return;
 		}
+		var channel = selectedChannel(root);
 		var terminalId = selectedTerminalId(root);
-		if (!terminalId) {
+		var qrMethod = selectedQrMethod(root);
+		if ('terminal' === channel && !terminalId) {
 			appendLog(root, 'warning', 'Start blocked because no terminal is selected yet.');
 			setStatus(root, t('selectTerminal', 'Select a terminal first.'), 'warning');
 			return;
@@ -490,11 +626,16 @@
 		setActionButtonsDisabled(root, true);
 		setSelectDisabled(root, true);
 		setBusy(root, true);
-		setStatus(root, t('sending', 'Sending to terminal…'), 'info');
-		postAction(root, 'mtfwc_start_payment', { terminal_id: terminalId }).then(function (result) {
+		hideQr(root);
+		setStatus(root, 'qr' === channel ? t('sendingQr', 'Creating QR code…') : t('sending', 'Sending to terminal…'), 'info');
+		var fields = 'qr' === channel ? { channel: 'qr', qr_method: qrMethod } : { terminal_id: terminalId };
+		postAction(root, 'mtfwc_start_payment', fields).then(function (result) {
 			root.setAttribute('data-mtfwc-request-pending', 'false');
 			if (!result || !result.ok || !result.json || !result.json.success) {
-				setStatus(root, t('failed', 'Payment failed. You can try again.'), 'error');
+				var errorMessage = 'qr' === channel && result && result.json && 'string' === typeof result.json.data
+					? result.json.data
+					: t('failed', 'Payment failed. You can try again.');
+				setStatus(root, errorMessage, 'error');
 				resetToIdle(root);
 				return;
 			}
@@ -505,7 +646,14 @@
 				setStatus(root, t('failed', 'Payment failed. You can try again.'), 'error');
 				resetToIdle(root);
 			} else {
+				// The server reuses any open attempt for this order, which may sit on
+				// the other channel than the one the cashier just picked. Follow it.
+				syncChannel(root, result);
+				var qrShown = showQr(root, resultQrCode(result));
 				startAutoPoll(root);
+				if ('qr' === selectedChannel(root) && !qrShown) {
+					setStatus(root, t('qrUnavailable', 'Mollie did not return a QR code. Try again or use the terminal.'), 'error');
+				}
 			}
 		});
 	}
@@ -584,6 +732,7 @@
 	function cancelAfterMethodSwitch(root) {
 		var seqAtSwitch = root.mtfwcPollSeq;
 		stopAutoPoll(root);
+		hideQr(root);
 		appendLog(root, 'info', 'Payment method changed away from Mollie Terminal; canceling the terminal payment.');
 		setActionButtonsDisabled(root, true);
 		setStatus(root, t('contacting', 'Contacting Mollie Terminal…'), 'info');
@@ -737,6 +886,7 @@
 		var content;
 		var clear;
 		var copy;
+		var channels;
 		if (root.getAttribute('data-mtfwc-bound') === 'true') {
 			return;
 		}
@@ -784,6 +934,10 @@
 			});
 		}
 		bindClick(root, '.mtfwc-primary-action', onPrimaryAction);
+		channels = root.querySelectorAll('.mtfwc-channel');
+		for (var i = 0; i < channels.length; i++) {
+			channels[i].addEventListener('click', function (event) { selectChannel(root, event.target.getAttribute('data-channel')); });
+		}
 		bindCancelOnLeave(root);
 		loadTerminals(root);
 		// Resume an already-open payment on reload, otherwise show a static idle
@@ -791,6 +945,7 @@
 		if (root.getAttribute('data-order-id') && root.getAttribute('data-order-id') !== '0') {
 			if (root.getAttribute('data-resume') === '1') {
 				root.mtfwcCompleted = false;
+				selectChannel(root, root.getAttribute('data-resume-channel'));
 				appendLog(root, 'info', 'Resuming an open Mollie Terminal payment after page load.');
 				startAutoPoll(root);
 			} else {

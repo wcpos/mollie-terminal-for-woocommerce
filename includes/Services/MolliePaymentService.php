@@ -24,29 +24,10 @@ class MolliePaymentService {
 
 	public function start_payment_for_order( $order, string $terminal_id = '' ): array {
 		$terminal_id = $terminal_id ?: $this->settings->default_terminal_id();
-		return PaymentLock::with_lock( (int) $order->get_id(), 'create_payment', function () use ( $order, $terminal_id ) {
-			if ( $order->is_paid() ) {
-				Logger::log( 'Mollie terminal payment start skipped because order is already paid.', array( 'order_id' => (int) $order->get_id() ), 'info' );
-				return array( 'status' => 'already_paid' );
-			}
-			$current = PaymentAttempt::current( $order );
-			if ( $current && ! empty( $current['payment_id'] ) ) {
-				$remote = $this->client->get_payment( $current['payment_id'] );
-				$result = $this->reconciler->reconcile( $order, $remote, 'create_reuse' );
-				$status = $result['payment_status'] ?? $result['status'] ?? '';
-				if ( in_array( $status, array( 'open', 'pending', 'authorized', 'paid' ), true ) ) {
-					Logger::log( 'Reusing active Mollie terminal payment.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'], 'status' => $status ), 'info' );
-					return array_merge( $result, array( 'payment' => $remote, 'reused' => true ) );
-				}
-				if ( ! PaymentAttempt::is_final_unpaid( (string) $status ) ) {
-					Logger::log( 'Reusing non-final Mollie terminal payment state.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'], 'status' => $status ), 'info' );
-					return array_merge( $result, array( 'reused' => true ) );
-				}
-			}
+		return $this->start_attempt( $order, 'pointofsale', $terminal_id, function () use ( $order, $terminal_id ) {
 			$this->terminals->validate_terminal( $terminal_id );
 			$amount = Money::to_mollie_value( $order->get_total(), $order->get_currency() );
-			Logger::log( 'Creating Mollie terminal payment.', array( 'order_id' => (int) $order->get_id(), 'terminal_id' => $terminal_id, 'amount' => $amount, 'currency' => $order->get_currency() ), 'info' );
-			$payload = array(
+			return array(
 				'amount' => array( 'currency' => $order->get_currency(), 'value' => $amount ),
 				'description' => sprintf( 'Order #%s', $order->get_order_number() ),
 				'method' => 'pointofsale',
@@ -55,11 +36,68 @@ class MolliePaymentService {
 				'webhookUrl' => $this->settings->webhook_url(),
 				'metadata' => array( 'order_id' => (string) $order->get_id(), 'terminal_id' => $terminal_id ),
 			);
-			$payment = $this->client->create_payment( $payload );
-			PaymentAttempt::record_new( $order, $payment, $terminal_id, $this->settings->mode() );
-			Logger::log( 'Mollie terminal payment created.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => PaymentAttempt::payment_id( $payment ), 'status' => PaymentAttempt::payment_status( $payment ), 'terminal_id' => $terminal_id ), 'success' );
-			return array( 'status' => 'created', 'payment' => $payment );
 		} );
+	}
+
+	public function start_qr_payment_for_order( $order, string $method ): array {
+		return $this->start_attempt( $order, $method, '', function () use ( $order, $method ) {
+			$amount = Money::to_mollie_value( $order->get_total(), $order->get_currency() );
+			return array(
+				'amount' => array( 'currency' => $order->get_currency(), 'value' => $amount ),
+				'description' => sprintf( 'Order #%s', $order->get_order_number() ),
+				'method' => $method,
+				'redirectUrl' => $order->get_checkout_order_received_url(),
+				'webhookUrl' => $this->settings->webhook_url(),
+				'metadata' => array( 'order_id' => (string) $order->get_id(), 'channel' => 'qr' ),
+			);
+		}, array( 'details.qrCode' ) );
+	}
+
+	private function start_attempt( $order, string $method, string $terminal_id, callable $build_payload, array $include = array() ): array {
+		return PaymentLock::with_lock( (int) $order->get_id(), 'create_payment', function () use ( $order, $method, $terminal_id, $build_payload, $include ) {
+			if ( $order->is_paid() ) {
+				Logger::log( 'Mollie terminal payment start skipped because order is already paid.', array( 'order_id' => (int) $order->get_id() ), 'info' );
+				return array( 'status' => 'already_paid' );
+			}
+			$current = PaymentAttempt::current( $order );
+			if ( $current && ! empty( $current['payment_id'] ) ) {
+				$current_include = PaymentAttempt::is_qr_method( $current['method'] ) ? array( 'details.qrCode' ) : array();
+				$remote = $this->client->get_payment( $current['payment_id'], $current_include );
+				$result = $this->reconciler->reconcile( $order, $remote, 'create_reuse' );
+				$status = $result['payment_status'] ?? $result['status'] ?? '';
+				// The reused attempt may belong to the other channel than the one
+				// the cashier just picked; tell the panel which one it is.
+				$reused = array( 'reused' => true, 'method' => $current['method'], 'channel' => PaymentAttempt::is_qr_method( $current['method'] ) ? 'qr' : 'terminal' );
+				if ( in_array( $status, array( 'open', 'pending', 'authorized', 'paid' ), true ) ) {
+					Logger::log( 'Reusing active Mollie terminal payment.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'], 'status' => $status ), 'info' );
+					return $this->with_qr_code( array_merge( $result, $reused, array( 'payment' => $remote ) ), $remote );
+				}
+				if ( ! PaymentAttempt::is_final_unpaid( (string) $status ) ) {
+					Logger::log( 'Reusing non-final Mollie terminal payment state.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'], 'status' => $status ), 'info' );
+					return array_merge( $result, $reused );
+				}
+			}
+			$payload = $build_payload();
+			Logger::log( 'Creating Mollie payment.', array( 'order_id' => (int) $order->get_id(), 'terminal_id' => $terminal_id, 'method' => $method, 'amount' => $payload['amount']['value'] ?? '', 'currency' => $order->get_currency() ), 'info' );
+			$payment = $this->client->create_payment( $payload, $include );
+			PaymentAttempt::record_new( $order, $payment, $terminal_id, $this->settings->mode(), $method );
+			Logger::log( 'Mollie terminal payment created.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => PaymentAttempt::payment_id( $payment ), 'status' => PaymentAttempt::payment_status( $payment ), 'terminal_id' => $terminal_id ), 'success' );
+			return $this->with_qr_code( array( 'status' => 'created', 'payment' => $payment, 'method' => $method, 'channel' => PaymentAttempt::is_qr_method( $method ) ? 'qr' : 'terminal' ), $payment );
+		} );
+	}
+
+	public static function qr_code_from_payment( array $payment ): ?array {
+		if ( 'open' !== ( $payment['status'] ?? '' ) || ! is_array( $payment['details']['qrCode'] ?? null ) ) { return null; }
+		$qr = $payment['details']['qrCode'];
+		$src = trim( (string) ( $qr['src'] ?? '' ) );
+		if ( 0 !== strpos( $src, 'data:image/' ) && 0 !== strpos( $src, 'https://' ) ) { return null; }
+		return array( 'src' => $src, 'width' => (int) ( $qr['width'] ?? 0 ), 'height' => (int) ( $qr['height'] ?? 0 ) );
+	}
+
+	private function with_qr_code( array $result, array $payment ): array {
+		$qr_code = self::qr_code_from_payment( $payment );
+		if ( $qr_code ) { $result['qr_code'] = $qr_code; }
+		return $result;
 	}
 
 	public function poll_order( $order ): array {
@@ -71,8 +109,10 @@ class MolliePaymentService {
 		$status = (string) ( $current['status'] ?? '' );
 		if ( PaymentAttempt::is_non_final( $status ) ) {
 			Logger::log( 'Polling Mollie terminal payment.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'] ?? '' ), 'info' );
-			$payment = $this->client->get_payment( $current['payment_id'] );
+			$include = PaymentAttempt::is_qr_method( $current['method'] ) ? array( 'details.qrCode' ) : array();
+			$payment = $this->client->get_payment( $current['payment_id'], $include );
 			$result = $this->reconciler->reconcile( $order, $payment, 'poll' );
+			$result = $this->with_qr_code( $result, $payment );
 		} else {
 			$result = array( 'status' => $status );
 		}

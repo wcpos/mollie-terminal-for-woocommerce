@@ -18,13 +18,15 @@ This plugin starts Mollie `pointofsale` payments for in-person checkout and trea
 1. Install and activate WooCommerce.
 2. Activate this plugin.
 3. Go to WooCommerce → Settings → Payments → Mollie Terminal.
-4. Choose an **API key source**: enter your Mollie **live** API key here, or
+4. Choose an **API key source**: enter the Mollie API key matching the selected
+   mode here, or
    reuse the key already configured in the official *Mollie Payments for
    WooCommerce* plugin (matched to the selected mode). See the note below about
    test mode.
-5. Pick a **default terminal** from the dropdown. The list is fetched live from
-   your Mollie account (inactive terminals are hidden — Mollie cannot
-   reactivate them), so you no longer paste a terminal ID by hand.
+5. If you accept terminal payments, pick a **default terminal** from the
+   dropdown. The list is fetched live from your Mollie account (inactive
+   terminals are hidden — Mollie cannot reactivate them), so you no longer
+   paste a terminal ID by hand. QR-only setups can leave it empty.
 6. Optionally restrict **Enabled terminals** to the devices actually in use —
    only those can be chosen at checkout (empty = all active terminals; the
    default terminal is always available).
@@ -58,6 +60,22 @@ reloaded mid-payment, the panel resumes polling the open payment automatically.
 If the customer changes their mind and another payment method is selected, the
 terminal payment is stopped and canceled.
 
+## QR code payments
+
+Merchants in the Netherlands and Belgium can also let customers pay by scanning
+an on-screen iDEAL or Bancontact QR code with their banking app. Enable the
+methods you accept under **WooCommerce → Settings → Payments → Mollie Terminal
+→ QR code payments**. The cashier can then switch the checkout panel from
+**Terminal** to **QR code**, choose a method when both are enabled, and click
+**Show QR code**.
+
+The plugin tracks QR payments through the same automatic Mollie polling and
+webhook flow as terminal payments. After paying on their phone, the customer
+lands on the WooCommerce order-received page. iDEAL QR can be tried with a
+Mollie test API key; Bancontact QR requires live mode. Bancontact caps QR
+payments at €1,500.00 per transaction (a scheme limit, not a plugin one); for
+larger totals use the terminal.
+
 ## Stale payment cleanup
 
 A Mollie `pointofsale` payment can stay "open" on the Mollie side if the flow
@@ -89,7 +107,7 @@ cannot drive a physical (or iOS/Android) terminal, so terminal payments cannot
 be exercised end-to-end in the test environment. This is a Mollie platform
 limitation, not a plugin restriction. Use Live mode with your live API key to
 take terminal payments. The settings screen shows a warning when test mode is
-selected.
+selected. iDEAL QR payments do work in test mode.
 
 ## Development
 

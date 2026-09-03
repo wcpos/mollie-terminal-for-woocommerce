@@ -40,9 +40,37 @@ class PaymentReconciler {
 		if ( $current && $current['payment_id'] !== $payment_id && $metadata_order_id !== (int) $order->get_id() ) { $errors[] = 'payment ID does not match this order'; }
 		if ( isset( $payment['amount']['value'] ) && ! Money::equals( (string) $payment['amount']['value'], (string) $order->get_total(), (string) $order->get_currency() ) ) { $errors[] = 'amount mismatch'; }
 		if ( isset( $payment['amount']['currency'] ) && strtoupper( (string) $payment['amount']['currency'] ) !== strtoupper( (string) $order->get_currency() ) ) { $errors[] = 'currency mismatch'; }
-		if ( isset( $payment['method'] ) && 'pointofsale' !== $payment['method'] ) { $errors[] = 'payment method is not pointofsale'; }
+		$method   = (string) ( $payment['method'] ?? '' );
+		$recorded = self::recorded_method( $order, $payment_id );
+		if ( null === $recorded ) {
+			// Every payment this plugin creates is written to the attempt history,
+			// so an ID we never recorded cannot pay this order — even when its
+			// metadata order_id collides (shops sharing one Mollie profile).
+			$errors[] = 'payment is not known for this order';
+		} elseif ( '' !== $recorded ) {
+			if ( $method !== $recorded ) { $errors[] = 'payment method mismatch'; }
+		} elseif ( ! in_array( $method, array_merge( array( 'pointofsale' ), $this->settings->qr_methods() ), true ) ) {
+			// Attempts recorded before 0.5.0 carry no method: accept only what
+			// this shop can actually have started.
+			$errors[] = 'payment method is not supported';
+		}
 		if ( isset( $payment['mode'] ) && $payment['mode'] !== $this->settings->mode() ) { $errors[] = 'environment mismatch'; }
 		return array( 'valid' => empty( $errors ), 'errors' => $errors );
+	}
+
+	/**
+	 * Method this shop recorded when it created $payment_id for $order: the
+	 * current attempt first, then the attempt history (abandoned attempts lose
+	 * their current pointer but keep their history entry). Returns '' for an
+	 * attempt recorded before methods were stored, null for an unknown payment.
+	 */
+	private static function recorded_method( $order, string $payment_id ): ?string {
+		$current = PaymentAttempt::current( $order );
+		if ( $current && $current['payment_id'] === $payment_id ) { return (string) $current['method']; }
+		foreach ( PaymentAttempt::history( $order ) as $attempt ) {
+			if ( ( $attempt['payment_id'] ?? '' ) === $payment_id ) { return (string) ( $attempt['method'] ?? '' ); }
+		}
+		return in_array( $payment_id, PaymentAttempt::abandoned( $order ), true ) ? '' : null;
 	}
 
 	private function complete_paid_order( $order, array $payment, string $source ): array {

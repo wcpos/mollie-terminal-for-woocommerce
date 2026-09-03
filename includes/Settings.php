@@ -48,6 +48,14 @@ class Settings {
 	/** Whether the checkout log tools (Show logs / Copy / Clear) are shown. */
 	public function show_logs(): bool { return 'yes' === $this->get( 'show_logs', 'no' ); }
 
+	/** Enabled on-screen QR payment methods, in their fixed display order. */
+	public function qr_methods(): array {
+		$value = $this->get( 'qr_methods', array() );
+		if ( is_string( $value ) ) { $value = '' === $value ? array() : array( $value ); }
+		if ( ! is_array( $value ) ) { return array(); }
+		return array_values( array_intersect( array( 'ideal', 'bancontact' ), array_map( 'strval', $value ) ) );
+	}
+
 	/**
 	 * Terminals the merchant allows at checkout. Empty means all active
 	 * terminals are allowed (no restriction configured). When a restriction is
