@@ -42,6 +42,7 @@ class AjaxHandler {
 		if ( ! $order_id || ! $this->can_access_order( $order_id ) ) {
 			wp_send_json_error( __( 'Unauthorized request.', 'mollie-terminal-for-woocommerce' ), 403 );
 		}
+		$this->require_gateway_enabled();
 		try {
 			$settings = $this->settings();
 			$default  = $settings->default_terminal_id();
@@ -121,6 +122,7 @@ class AjaxHandler {
 			if ( ! $this->can_access_order( $order_id ) ) {
 				wp_send_json_error( __( 'Unauthorized request.', 'mollie-terminal-for-woocommerce' ), 403 );
 			}
+			$this->require_gateway_enabled();
 			Logger::log( 'Mollie Terminal AJAX request received.', array( 'operation' => $operation, 'order_id' => $order_id ), 'info' );
 			$order = wc_get_order( $order_id );
 			if ( ! $order ) {
@@ -146,6 +148,18 @@ class AjaxHandler {
 		if ( current_user_can( 'manage_woocommerce' ) || current_user_can( 'edit_shop_order', $order_id ) ) { return true; }
 		$token = sanitize_text_field( wp_unslash( $_POST['order_token'] ?? '' ) );
 		return $token && hash_equals( self::order_token( $order_id ), $token );
+	}
+
+	/**
+	 * "Disabled" in WooCommerce → Payments must mean disabled: the checkout
+	 * actions stay registered while the plugin is active, so they check the
+	 * gateway switch themselves. The webhook is deliberately not gated — a
+	 * payment already in flight must still settle.
+	 */
+	private function require_gateway_enabled(): void {
+		if ( ! $this->settings()->enabled() ) {
+			wp_send_json_error( __( 'Mollie Terminal is disabled.', 'mollie-terminal-for-woocommerce' ), 403 );
+		}
 	}
 
 	public static function order_token( int $order_id ): string { return substr( wp_hash( 'mtfwc_order_' . $order_id . wp_salt( 'nonce' ) ), 0, 16 ); }

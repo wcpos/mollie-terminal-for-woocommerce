@@ -38,7 +38,9 @@ use WCPOS\WooCommercePOS\MollieTerminal\AjaxHandler;
 
 function start_qr( array $settings, string $method ): JsonResponseForQrGuard {
 	global $options;
-	$options = array( 'woocommerce_mollie_terminal_for_woocommerce_settings' => $settings );
+	// The gateway switch is checked first (see ajax-gateway-disabled.php); this
+	// script is about the QR method guard behind it.
+	$options = array( 'woocommerce_mollie_terminal_for_woocommerce_settings' => array_merge( array( 'enabled' => 'yes' ), $settings ) );
 	$_POST   = array( 'order_id' => '123', 'order_token' => AjaxHandler::order_token( 123 ), 'channel' => 'qr', 'qr_method' => $method );
 	try {
 		( new AjaxHandler() )->mtfwc_start_payment();
