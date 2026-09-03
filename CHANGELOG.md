@@ -2,6 +2,12 @@
 
 All notable changes to Mollie Terminal for WooCommerce will be documented in this file.
 
+## 0.5.2 - 2026-09-03
+
+### Fixed
+
+- The on-screen QR code rendered as a thin strip beside its caption in the POS checkout: theme and WooCommerce rules for payment-method icons (inline, floated, height-capped `img`) overrode the image size. The QR is now pinned as a 240px square block with its own centred caption, regardless of theme CSS.
+
 ## 0.5.1 - 2026-09-03
 
 ### Fixed
