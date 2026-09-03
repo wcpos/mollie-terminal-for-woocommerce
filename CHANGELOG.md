@@ -2,6 +2,19 @@
 
 All notable changes to Mollie Terminal for WooCommerce will be documented in this file.
 
+## 0.5.0 - 2026-09-03
+
+### Added
+
+- Optional on-screen QR payments for iDEAL and Bancontact. Merchants choose the enabled methods in the gateway settings; cashiers switch between **Terminal** and **QR code** in the checkout panel.
+- QR payment creation requests Mollie's `details.qrCode`, displays the returned image, and uses the existing poll, webhook, reconciliation, cancellation, and payment-lock flow.
+- iDEAL QR can be tested with a Mollie test API key even when no physical terminal is available.
+
+### Changed
+
+- Payment attempts now record their Mollie method so reconciliation can verify terminal, iDEAL, and Bancontact payments against the method that was started.
+- The premature-submit notice now applies equally to terminal and QR payments.
+
 ## 0.4.0 - 2026-07-09
 
 ### Fixed

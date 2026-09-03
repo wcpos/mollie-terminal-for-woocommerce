@@ -131,10 +131,11 @@ improvement — our key lives in `wp_options` (gateway settings) too, which is
 standard WP practice.
 
 ### 11. QR-code payments
-Mollie has confirmed to the tester that QR-initiated terminal payments are
-not yet exposed in their Payments API (currently iOS-app only). Useful for
-customers with NFC disabled. **Blocked on Mollie** — watch item; revisit when
-their API supports it.
+Mollie has confirmed that displaying a QR code on the terminal's own screen is
+not exposed through the Payments API. Useful for customers with NFC disabled.
+**Partially shipped in 0.5.0:** the plugin can now show an iDEAL or Bancontact
+QR code in the POS checkout panel. The terminal-screen variant remains blocked
+on Mollie.
 
 ---
 

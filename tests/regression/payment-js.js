@@ -19,6 +19,7 @@ class FakeElement {
 		this.textContent = '';
 		this.className = classes.join(' ');
 		this.disabled = false;
+		this.hidden = false;
 		this.scrollHeight = 0;
 		this.scrollTop = 0;
 		this.clickCount = 0;
@@ -71,7 +72,26 @@ function makePanel(orderId, attrs = {}) {
 	root.append(makeButton('mtfwc-toggle-log', 'Show logs')).setAttribute('data-expanded', 'false');
 	root.append(makeButton('mtfwc-clear-log', 'Clear logs'));
 	root.append(makeButton('mtfwc-copy-log', 'Copy logs'));
-	root.append(new FakeElement(['mtfwc-terminal-select']));
+	if (attrs['data-qr-methods']) {
+		const toggle = root.append(new FakeElement(['mtfwc-channel-toggle']));
+		const terminalChannel = toggle.append(makeButton('mtfwc-channel', 'Terminal'));
+		terminalChannel.setAttribute('data-channel', 'terminal');
+		terminalChannel.setAttribute('aria-pressed', 'true');
+		const qrChannel = toggle.append(makeButton('mtfwc-channel', 'QR code'));
+		qrChannel.setAttribute('data-channel', 'qr');
+		qrChannel.setAttribute('aria-pressed', 'false');
+	}
+	const terminalField = root.append(new FakeElement(['mtfwc-terminal-field']));
+	terminalField.append(new FakeElement(['mtfwc-terminal-select']));
+	if (attrs['data-qr-methods']) {
+		const qrField = root.append(new FakeElement(['mtfwc-qr-field']));
+		qrField.hidden = true;
+		const qrSelect = qrField.append(new FakeElement(['mtfwc-qr-method-select']));
+		qrSelect.value = attrs['data-qr-methods'].split(',')[0];
+		const qrCode = root.append(new FakeElement(['mtfwc-qr-code']));
+		qrCode.hidden = true;
+		qrCode.append(new FakeElement(['mtfwc-qr-image']));
+	}
 	const primary = makeButton('mtfwc-primary-action', 'Start Terminal Payment');
 	primary.setAttribute('data-mtfwc-mode', 'start');
 	root.append(primary);
@@ -175,10 +195,10 @@ async function flush() {
 		return flush();
 	}
 
-	function resolveError() {
+	function resolveError(data) {
 		const resolve = pendingFetches.shift();
 		assert(resolve, 'expected a pending fetch request');
-		resolve({ ok: false, status: 500, text: () => Promise.resolve('{"success":false}') });
+		resolve({ ok: false, status: 500, text: () => Promise.resolve(JSON.stringify({ success: false, data })) });
 		return flush();
 	}
 
@@ -405,6 +425,48 @@ async function flush() {
 	await resolveNext({ terminals: [], default_terminal_id: '' });
 	assert.strictEqual(emptySelect.disabled, true, 'an empty terminal list should disable the select');
 	assert.strictEqual(emptySelect.getAttribute('data-mtfwc-unavailable'), '1', 'an empty terminal list should mark the select unavailable');
+
+	// QR mode switches fields and labels, posts the selected method, renders a
+	// returned QR image without logging its data URI, and hides it on final state.
+	const qrPanel = makePanel('1111', { 'data-qr-methods': 'ideal,bancontact' });
+	panels.push(qrPanel);
+	jqueryHandlers.updated_checkout();
+	await resolveNext({ terminals: [], default_terminal_id: '' });
+	const channels = qrPanel.querySelectorAll('.mtfwc-channel');
+	const terminalField = qrPanel.querySelector('.mtfwc-terminal-field');
+	const qrField = qrPanel.querySelector('.mtfwc-qr-field');
+	const qrAction = qrPanel.querySelector('.mtfwc-primary-action');
+	channels[1].click();
+	assert.strictEqual(channels[0].getAttribute('aria-pressed'), 'false', 'switching to QR should release the terminal channel');
+	assert.strictEqual(channels[1].getAttribute('aria-pressed'), 'true', 'switching to QR should press the QR channel');
+	assert.strictEqual(terminalField.hidden, true, 'switching to QR should hide the terminal field');
+	assert.strictEqual(qrField.hidden, false, 'switching to QR should show the QR method field');
+	assert.strictEqual(qrAction.textContent, 'Show QR code', 'switching to QR should update the start label');
+	qrPanel.querySelector('.mtfwc-qr-method-select').value = 'bancontact';
+	qrAction.click();
+	const qrStart = fetchCalls[fetchCalls.length - 1].options.body.fields;
+	assert.strictEqual(qrStart.channel, 'qr', 'QR start should post channel=qr');
+	assert.strictEqual(qrStart.qr_method, 'bancontact', 'QR start should post the selected QR method');
+	assert.strictEqual(channels[0].disabled, true, 'channel buttons should be disabled while QR creation is in flight');
+	const qrSrc = 'data:image/png;base64,VERY-LARGE-SECRET-LIKE-CONTENT';
+	await resolveNext({ status: 'created', qr_code: { src: qrSrc, width: 180, height: 190 } });
+	const qrCode = qrPanel.querySelector('.mtfwc-qr-code');
+	const qrImage = qrPanel.querySelector('.mtfwc-qr-image');
+	assert.strictEqual(qrCode.hidden, false, 'a QR response should show the QR block');
+	assert.strictEqual(qrImage.getAttribute('src'), qrSrc, 'a QR response should set the image source');
+	assert.strictEqual(qrImage.getAttribute('width'), '180', 'a QR response should set the image width');
+	assert.strictEqual(qrImage.getAttribute('height'), '190', 'a QR response should set the image height');
+	assert(!qrPanel.querySelector('.mtfwc-payment-log-textarea').value.includes(qrSrc), 'browser logs must not include the QR source');
+	assert(/customer to scan/i.test(qrPanel.querySelector('.mtfwc-payment-status').textContent), 'QR polling should show its waiting message');
+	await fireTimers();
+	await resolveNext({ status: 'pending' }); // the earlier locked panel also polled
+	await resolveNext({ status: 'expired' });
+	assert.strictEqual(qrCode.hidden, true, 'a final payment state should hide the QR block');
+	assert.strictEqual(qrImage.getAttribute('src'), '', 'hiding the QR should clear the image source');
+	assert.strictEqual(channels[0].disabled, false, 'channel buttons should re-enable after the QR payment ends');
+	qrAction.click();
+	await resolveError('Bancontact QR payments cannot exceed €1500.');
+	assert(/cannot exceed €1500/.test(qrPanel.querySelector('.mtfwc-payment-status').textContent), 'a QR start failure should surface Mollie\'s error message');
 
 	// Closing the page while a payment is in flight fires one best-effort cancel
 	// beacon (the locked panel is still polling).

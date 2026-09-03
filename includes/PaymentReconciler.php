@@ -40,7 +40,12 @@ class PaymentReconciler {
 		if ( $current && $current['payment_id'] !== $payment_id && $metadata_order_id !== (int) $order->get_id() ) { $errors[] = 'payment ID does not match this order'; }
 		if ( isset( $payment['amount']['value'] ) && ! Money::equals( (string) $payment['amount']['value'], (string) $order->get_total(), (string) $order->get_currency() ) ) { $errors[] = 'amount mismatch'; }
 		if ( isset( $payment['amount']['currency'] ) && strtoupper( (string) $payment['amount']['currency'] ) !== strtoupper( (string) $order->get_currency() ) ) { $errors[] = 'currency mismatch'; }
-		if ( isset( $payment['method'] ) && 'pointofsale' !== $payment['method'] ) { $errors[] = 'payment method is not pointofsale'; }
+		$method = (string) ( $payment['method'] ?? '' );
+		if ( $current && $current['payment_id'] === $payment_id && '' !== $current['method'] ) {
+			if ( $method !== $current['method'] ) { $errors[] = 'payment method mismatch'; }
+		} elseif ( ! in_array( $method, array( 'pointofsale', 'ideal', 'bancontact' ), true ) ) {
+			$errors[] = 'payment method is not supported';
+		}
 		if ( isset( $payment['mode'] ) && $payment['mode'] !== $this->settings->mode() ) { $errors[] = 'environment mismatch'; }
 		return array( 'valid' => empty( $errors ), 'errors' => $errors );
 	}

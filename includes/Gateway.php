@@ -48,6 +48,15 @@ class Gateway extends WC_Payment_Gateway {
 		if ( null !== $enabled_terminals_field ) {
 			$this->form_fields['enabled_terminals'] = $enabled_terminals_field;
 		}
+		$this->form_fields['qr_methods'] = array(
+			'title'       => __( 'QR code payments', 'mollie-terminal-for-woocommerce' ),
+			'type'        => 'multiselect',
+			'class'       => 'wc-enhanced-select',
+			'options'     => array( 'ideal' => __( 'iDEAL', 'mollie-terminal-for-woocommerce' ), 'bancontact' => __( 'Bancontact', 'mollie-terminal-for-woocommerce' ) ),
+			'default'     => array(),
+			'description' => __( 'Let cashiers show a QR code on screen that the customer scans with their banking app. The method must be active on your Mollie profile. iDEAL QR also works in test mode, so it can be tried without a terminal.', 'mollie-terminal-for-woocommerce' ),
+			'desc_tip'    => true,
+		);
 		$this->form_fields['lock_terminal'] = array(
 			'title'       => __( 'Lock terminal selection', 'mollie-terminal-for-woocommerce' ),
 			'type'        => 'checkbox',
@@ -157,7 +166,7 @@ class Gateway extends WC_Payment_Gateway {
 		$settings = new Settings();
 		echo '<h2>' . esc_html__( 'Mollie Terminal Diagnostics', 'mollie-terminal-for-woocommerce' ) . '</h2>';
 		if ( 'live' !== $settings->mode() ) {
-			echo '<div class="notice notice-warning inline"><p>' . esc_html__( 'Test mode is selected. Mollie terminals exist only on live accounts, so the test API key cannot drive a physical terminal. Switch to Live mode with your live API key to take terminal payments.', 'mollie-terminal-for-woocommerce' ) . '</p></div>';
+			echo '<div class="notice notice-warning inline"><p>' . esc_html__( 'Test mode is selected. Mollie terminals exist only on live accounts, so the test API key cannot drive a physical terminal. Switch to Live mode with your live API key to take terminal payments. iDEAL QR payments do work in test mode.', 'mollie-terminal-for-woocommerce' ) . '</p></div>';
 		}
 		echo '<table class="form-table"><tbody>';
 		$this->row( __( 'Active environment', 'mollie-terminal-for-woocommerce' ), $settings->mode() );
@@ -197,6 +206,7 @@ class Gateway extends WC_Payment_Gateway {
 		}
 
 		$settings = new Settings();
+		$qr_methods = $settings->qr_methods();
 		$order_id = 0;
 		$order_token = '';
 		$order = null;
@@ -214,20 +224,32 @@ class Gateway extends WC_Payment_Gateway {
 		// for this order — otherwise a refresh mid-payment drops the cashier back
 		// to an idle panel while the payment lingers open on Mollie.
 		$resume = false;
+		$resume_channel = 'terminal';
 		if ( $order && ! $order->is_paid() ) {
 			$current = PaymentAttempt::current( $order );
 			if ( $current && ! empty( $current['payment_id'] ) && PaymentAttempt::is_non_final( (string) ( $current['status'] ?? '' ) ) ) {
 				$resume = true;
+				$resume_channel = PaymentAttempt::is_qr_method( (string) ( $current['method'] ?? '' ) ) ? 'qr' : 'terminal';
 			}
 		}
 
 		$is_pos = function_exists( 'woocommerce_pos_request' ) && woocommerce_pos_request();
 		$locked = $settings->lock_terminal();
-		echo '<div id="mtfwc-payment-interface" class="mtfwc-payment-interface" data-order-id="' . esc_attr( $order_id ) . '" data-order-token="' . esc_attr( $order_token ) . '" data-default-terminal-id="' . esc_attr( $settings->default_terminal_id() ) . '" data-pos="' . ( $is_pos ? '1' : '0' ) . '" data-lock-terminal="' . ( $locked ? '1' : '0' ) . '" data-resume="' . ( $resume ? '1' : '0' ) . '" data-gateway-id="' . esc_attr( Settings::GATEWAY_ID ) . '">';
+		$qr_data = $qr_methods ? ' data-qr-methods="' . esc_attr( implode( ',', $qr_methods ) ) . '" data-resume-channel="' . esc_attr( $resume_channel ) . '"' : '';
+		echo '<div id="mtfwc-payment-interface" class="mtfwc-payment-interface" data-order-id="' . esc_attr( $order_id ) . '" data-order-token="' . esc_attr( $order_token ) . '" data-default-terminal-id="' . esc_attr( $settings->default_terminal_id() ) . '" data-pos="' . ( $is_pos ? '1' : '0' ) . '" data-lock-terminal="' . ( $locked ? '1' : '0' ) . '" data-resume="' . ( $resume ? '1' : '0' ) . '"' . $qr_data . ' data-gateway-id="' . esc_attr( Settings::GATEWAY_ID ) . '">';
 		echo '<div class="mtfwc-payment-card">';
 		echo '<h4>' . esc_html__( 'Mollie Terminal', 'mollie-terminal-for-woocommerce' ) . '</h4>';
 		if ( $order_id ) {
-			echo '<p class="mtfwc-payment-help">' . esc_html__( 'Send this order to a Mollie terminal. The payment completes automatically once the terminal confirms.', 'mollie-terminal-for-woocommerce' ) . '</p>';
+			$help = $qr_methods
+				? __( 'Send this order to a Mollie terminal, or show a QR code for the customer to scan. The payment completes automatically once Mollie confirms.', 'mollie-terminal-for-woocommerce' )
+				: __( 'Send this order to a Mollie terminal. The payment completes automatically once the terminal confirms.', 'mollie-terminal-for-woocommerce' );
+			echo '<p class="mtfwc-payment-help">' . esc_html( $help ) . '</p>';
+			if ( $qr_methods ) {
+				echo '<div class="mtfwc-channel-toggle" role="radiogroup" aria-label="' . esc_attr__( 'Payment channel', 'mollie-terminal-for-woocommerce' ) . '">';
+				echo '<button type="button" class="mtfwc-channel" data-channel="terminal" aria-pressed="true">' . esc_html__( 'Terminal', 'mollie-terminal-for-woocommerce' ) . '</button>';
+				echo '<button type="button" class="mtfwc-channel" data-channel="qr" aria-pressed="false">' . esc_html__( 'QR code', 'mollie-terminal-for-woocommerce' ) . '</button>';
+				echo '</div>';
+			}
 			$default_terminal = $settings->default_terminal_id();
 			echo '<div class="mtfwc-terminal-field">';
 			echo '<label class="mtfwc-terminal-label" for="mtfwc-terminal-select">' . esc_html__( 'Terminal', 'mollie-terminal-for-woocommerce' ) . '</label>';
@@ -246,14 +268,35 @@ class Gateway extends WC_Payment_Gateway {
 				echo '</select>';
 			}
 			echo '</div>';
+			if ( $qr_methods ) {
+				echo '<div class="mtfwc-qr-field" hidden>';
+				echo '<label class="mtfwc-terminal-label" for="mtfwc-qr-method-select">' . esc_html__( 'Payment method', 'mollie-terminal-for-woocommerce' ) . '</label>';
+				$labels = array( 'ideal' => __( 'iDEAL', 'mollie-terminal-for-woocommerce' ), 'bancontact' => __( 'Bancontact', 'mollie-terminal-for-woocommerce' ) );
+				if ( count( $qr_methods ) > 1 ) {
+					echo '<select id="mtfwc-qr-method-select" class="mtfwc-qr-method-select">';
+					foreach ( $qr_methods as $method ) { echo '<option value="' . esc_attr( $method ) . '">' . esc_html( $labels[ $method ] ) . '</option>'; }
+					echo '</select>';
+				} else {
+					echo '<span class="mtfwc-qr-method-single" data-method="' . esc_attr( $qr_methods[0] ) . '">' . esc_html( $labels[ $qr_methods[0] ] ) . '</span>';
+				}
+				echo '</div>';
+			}
 			// One button that toggles between Start and Cancel: while a payment is
 			// in flight the panel polls automatically, so a single control both
 			// starts and cancels the terminal payment (no separate status button).
 			$action_mode  = $resume ? 'cancel' : 'start';
-			$action_label = $resume ? __( 'Cancel Terminal Payment', 'mollie-terminal-for-woocommerce' ) : __( 'Start Terminal Payment', 'mollie-terminal-for-woocommerce' );
+			$action_label = $resume
+				? ( 'qr' === $resume_channel ? __( 'Cancel QR payment', 'mollie-terminal-for-woocommerce' ) : __( 'Cancel Terminal Payment', 'mollie-terminal-for-woocommerce' ) )
+				: __( 'Start Terminal Payment', 'mollie-terminal-for-woocommerce' );
 			echo '<div class="mtfwc-payment-actions">';
 			echo '<button type="button" class="button button-primary mtfwc-primary-action" data-mtfwc-mode="' . esc_attr( $action_mode ) . '" data-order-id="' . esc_attr( $order_id ) . '" data-order-token="' . esc_attr( $order_token ) . '">' . esc_html( $action_label ) . '</button>';
 			echo '</div>';
+			if ( $qr_methods ) {
+				echo '<div class="mtfwc-qr-code" hidden>';
+				echo '<img class="mtfwc-qr-image" alt="' . esc_attr__( 'Payment QR code', 'mollie-terminal-for-woocommerce' ) . '">';
+				echo '<p class="mtfwc-payment-help">' . esc_html__( 'Ask the customer to scan this with their banking app.', 'mollie-terminal-for-woocommerce' ) . '</p>';
+				echo '</div>';
+			}
 			echo '<div class="mtfwc-payment-status" role="status" aria-live="polite"></div>';
 		} else {
 			echo '<p class="mtfwc-payment-help">' . esc_html__( 'Payment activity logs will appear here during checkout. If payment creation fails, copy these logs for support.', 'mollie-terminal-for-woocommerce' ) . '</p>';
@@ -311,9 +354,14 @@ class Gateway extends WC_Payment_Gateway {
 					'copyFailed' => __( 'Unable to copy logs automatically.', 'mollie-terminal-for-woocommerce' ),
 					'startAction' => __( 'Start Terminal Payment', 'mollie-terminal-for-woocommerce' ),
 					'cancelAction' => __( 'Cancel Terminal Payment', 'mollie-terminal-for-woocommerce' ),
+					'startQrAction' => __( 'Show QR code', 'mollie-terminal-for-woocommerce' ),
+					'cancelQrAction' => __( 'Cancel QR payment', 'mollie-terminal-for-woocommerce' ),
 					'idle' => __( 'Mollie Terminal status: idle', 'mollie-terminal-for-woocommerce' ),
 					'sending' => __( 'Sending to terminal…', 'mollie-terminal-for-woocommerce' ),
+					'sendingQr' => __( 'Creating QR code…', 'mollie-terminal-for-woocommerce' ),
 					'waiting' => __( 'Waiting for terminal…', 'mollie-terminal-for-woocommerce' ),
+					'waitingQr' => __( 'Waiting for the customer to scan…', 'mollie-terminal-for-woocommerce' ),
+					'qrUnavailable' => __( 'Mollie did not return a QR code. Try again or use the terminal.', 'mollie-terminal-for-woocommerce' ),
 					'completing' => __( 'Payment complete — finishing order…', 'mollie-terminal-for-woocommerce' ),
 					'selectTerminal' => __( 'Select a terminal first.', 'mollie-terminal-for-woocommerce' ),
 					'failed' => __( 'Payment failed. You can try again.', 'mollie-terminal-for-woocommerce' ),
@@ -362,7 +410,7 @@ class Gateway extends WC_Payment_Gateway {
 		if ( $order->is_paid() ) {
 			return array( 'result' => 'success', 'redirect' => AjaxHandler::order_return_url( $order ) );
 		}
-		wc_add_notice( __( 'This order has not been paid on the terminal yet. Use “Start Terminal Payment” above and wait for the terminal to confirm — the order finishes on its own. If you have already paid, give it a few seconds and try again.', 'mollie-terminal-for-woocommerce' ), 'notice' );
+		wc_add_notice( __( 'This order has not been paid yet. Start the payment above and wait for Mollie to confirm — the order finishes on its own. If the customer has already paid, give it a few seconds and try again.', 'mollie-terminal-for-woocommerce' ), 'notice' );
 		return array( 'result' => 'failure' );
 	}
 

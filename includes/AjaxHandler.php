@@ -18,8 +18,14 @@ class AjaxHandler {
 
 	public function mtfwc_start_payment(): void {
 		$this->with_order( 'start_payment', function ( $order ) {
+			$channel     = 'qr' === sanitize_text_field( wp_unslash( $_POST['channel'] ?? 'terminal' ) ) ? 'qr' : 'terminal';
 			$terminal_id = sanitize_text_field( wp_unslash( $_POST['terminal_id'] ?? '' ) );
+			$qr_method   = sanitize_text_field( wp_unslash( $_POST['qr_method'] ?? '' ) );
 			$settings    = $this->settings();
+			if ( 'qr' === $channel ) {
+				if ( ! in_array( $qr_method, $settings->qr_methods(), true ) ) { wp_send_json_error( __( 'QR code payments are not enabled for this method.', 'mollie-terminal-for-woocommerce' ), 400 ); }
+				return $this->payment_service()->start_qr_payment_for_order( $order, $qr_method );
+			}
 			if ( $settings->lock_terminal() ) {
 				// Terminal selection is locked: always use the configured default,
 				// regardless of what the client submitted.

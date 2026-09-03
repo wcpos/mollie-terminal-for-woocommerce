@@ -57,7 +57,7 @@ class ScriptedMollieClient extends MollieApiClient {
 	public $get_responses;
 	public $cancel_calls = 0;
 	public function __construct( array $get_responses ) { $this->get_responses = $get_responses; }
-	public function get_payment( string $payment_id ): array { return array_shift( $this->get_responses ); }
+	public function get_payment( string $payment_id, array $include = array() ): array { return array_shift( $this->get_responses ); }
 	public function cancel_payment( string $payment_id ): array { $this->cancel_calls++; return array( 'id' => $payment_id, 'status' => 'canceled' ); }
 }
 

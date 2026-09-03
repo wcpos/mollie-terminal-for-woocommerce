@@ -70,7 +70,8 @@
 	line-height: 1.45 !important;
 }
 
-#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-terminal-field {
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-terminal-field,
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-qr-field {
 	display: flex !important;
 	flex-direction: column !important;
 	gap: .3rem !important;
@@ -91,7 +92,8 @@
 	letter-spacing: normal !important;
 }
 
-#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-terminal-select {
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-terminal-select,
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-qr-method-select {
 	display: block !important;
 	width: 100% !important;
 	max-width: 100% !important;
@@ -115,14 +117,16 @@
 	cursor: pointer !important;
 }
 
-#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-terminal-select:focus {
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-terminal-select:focus,
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-qr-method-select:focus {
 	outline: 2px solid #93c5fd !important;
 	outline-offset: 1px !important;
 	border-color: #2563eb !important;
 }
 
 #mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-terminal-select[aria-busy="true"],
-#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-terminal-select:disabled {
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-terminal-select:disabled,
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-qr-method-select:disabled {
 	opacity: .65 !important;
 	background: #f1f5f9 !important;
 	cursor: default !important;
@@ -138,7 +142,8 @@
 
 /* A single primary button toggles between Start and Cancel (data-mtfwc-mode).
    Styled explicitly so no theme button rule survives. */
-#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-payment-actions .button {
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-payment-actions .button,
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-channel-toggle .mtfwc-channel {
 	display: inline-block !important;
 	float: none !important;
 	width: auto !important;
@@ -163,7 +168,8 @@
 	transition: background-color .15s ease, opacity .15s ease !important;
 }
 
-#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-payment-actions .button:hover:not(:disabled) {
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-payment-actions .button:hover:not(:disabled),
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-channel-toggle .mtfwc-channel:hover:not(:disabled) {
 	background: #f1f5f9 !important;
 	color: #0f172a !important;
 	border-color: #cbd5e1 !important;
@@ -197,9 +203,44 @@
 	color: #b91c1c !important;
 }
 
-#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-payment-actions .button:disabled {
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-payment-actions .button:disabled,
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-channel-toggle .mtfwc-channel:disabled {
 	opacity: .55 !important;
 	cursor: not-allowed !important;
+}
+
+#mtfwc-payment-interface#mtfwc-payment-interface [hidden] {
+	display: none !important;
+}
+
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-channel-toggle {
+	display: flex !important;
+	gap: .5rem !important;
+	margin: .875rem 0 0 !important;
+}
+
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-channel-toggle .mtfwc-channel {
+	flex: 1 1 0 !important;
+}
+
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-channel-toggle .mtfwc-channel[aria-pressed="true"] {
+	background: #1d4ed8 !important;
+	border-color: #1d4ed8 !important;
+	color: #fff !important;
+}
+
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-qr-code {
+	margin: .875rem 0 0 !important;
+	text-align: center !important;
+}
+
+#mtfwc-payment-interface#mtfwc-payment-interface .mtfwc-qr-image {
+	display: inline-block !important;
+	max-width: 240px !important;
+	height: auto !important;
+	padding: .5rem !important;
+	border: 1px solid #e2e8f0 !important;
+	background: #fff !important;
 }
 
 /* The status line is the cashier's main feedback — render it as a banner. */

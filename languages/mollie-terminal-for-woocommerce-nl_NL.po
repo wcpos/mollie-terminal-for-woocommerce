@@ -2,8 +2,8 @@
 # Initial translation — review welcome.
 msgid ""
 msgstr ""
-"Project-Id-Version: Mollie Terminal for WooCommerce 0.4.0\n"
-"PO-Revision-Date: 2026-07-08 00:00+0000\n"
+"Project-Id-Version: Mollie Terminal for WooCommerce 0.5.0\n"
+"PO-Revision-Date: 2026-09-03 00:00+0000\n"
 "Last-Translator: kilbot\n"
 "Language-Team: Dutch\n"
 "MIME-Version: 1.0\n"
@@ -258,16 +258,16 @@ msgid "Test"
 msgstr "Test"
 
 #: includes/Gateway.php:160
-msgid "Test mode is selected. Mollie terminals exist only on live accounts, so the test API key cannot drive a physical terminal. Switch to Live mode with your live API key to take terminal payments."
-msgstr "Testmodus is geselecteerd. Mollie-terminals bestaan alleen op live-accounts, dus de test-API-sleutel kan geen fysieke terminal aansturen. Schakel over naar Live-modus met je live-API-sleutel om terminalbetalingen te ontvangen."
+msgid "Test mode is selected. Mollie terminals exist only on live accounts, so the test API key cannot drive a physical terminal. Switch to Live mode with your live API key to take terminal payments. iDEAL QR payments do work in test mode."
+msgstr "Testmodus is geselecteerd. Mollie-terminals bestaan alleen op live-accounts, dus de test-API-sleutel kan geen fysieke terminal aansturen. Schakel over naar Live-modus met je live-API-sleutel om terminalbetalingen te ontvangen. iDEAL QR-betalingen werken wel in de testmodus."
 
 #: includes/Gateway.php:321 includes/Services/MolliePaymentService.php:121
 msgid "The terminal did not respond, so the payment was set aside. Start a new payment or choose another method."
 msgstr "De terminal reageerde niet, dus de betaling is opzijgezet. Start een nieuwe betaling of kies een andere methode."
 
 #: includes/Gateway.php:365
-msgid "This order has not been paid on the terminal yet. Use “Start Terminal Payment” above and wait for the terminal to confirm — the order finishes on its own. If you have already paid, give it a few seconds and try again."
-msgstr "Deze bestelling is nog niet op de terminal betaald. Gebruik hierboven “Terminalbetaling starten” en wacht tot de terminal bevestigt — de bestelling wordt vanzelf afgerond. Als je al hebt betaald, wacht dan een paar seconden en probeer het opnieuw."
+msgid "This order has not been paid yet. Start the payment above and wait for Mollie to confirm — the order finishes on its own. If the customer has already paid, give it a few seconds and try again."
+msgstr "Deze bestelling is nog niet betaald. Start hierboven de betaling en wacht op de bevestiging van Mollie — de bestelling wordt vanzelf afgerond. Als de klant al heeft betaald, wacht dan een paar seconden en probeer het opnieuw."
 
 #: includes/Gateway.php:324
 msgid "This payment can no longer be canceled."
@@ -325,3 +325,67 @@ msgstr "ingesteld"
 msgid "— Select a terminal —"
 msgstr "— Selecteer een terminal —"
 
+
+#: includes/AjaxHandler.php:26
+msgid "QR code payments are not enabled for this method."
+msgstr "QR-codebetalingen zijn niet ingeschakeld voor deze methode."
+
+#: includes/Gateway.php:52
+msgid "QR code payments"
+msgstr "QR-codebetalingen"
+
+#: includes/Gateway.php:55 includes/Gateway.php:274
+msgid "iDEAL"
+msgstr "iDEAL"
+
+#: includes/Gateway.php:55 includes/Gateway.php:274
+msgid "Bancontact"
+msgstr "Bancontact"
+
+#: includes/Gateway.php:57
+msgid "Let cashiers show a QR code on screen that the customer scans with their banking app. The method must be active on your Mollie profile. iDEAL QR also works in test mode, so it can be tried without a terminal."
+msgstr "Laat kassamedewerkers een QR-code op het scherm tonen die de klant met de bank-app scant. De methode moet actief zijn in je Mollie-profiel. iDEAL QR werkt ook in de testmodus en kan dus zonder terminal worden geprobeerd."
+
+#: includes/Gateway.php:244
+msgid "Send this order to a Mollie terminal, or show a QR code for the customer to scan. The payment completes automatically once Mollie confirms."
+msgstr "Stuur deze bestelling naar een Mollie-terminal of toon een QR-code die de klant kan scannen. De betaling wordt automatisch afgerond zodra Mollie deze bevestigt."
+
+#: includes/Gateway.php:248
+msgid "Payment channel"
+msgstr "Betaalkanaal"
+
+#: includes/Gateway.php:250
+msgid "QR code"
+msgstr "QR-code"
+
+#: includes/Gateway.php:273
+msgid "Payment method"
+msgstr "Betaalmethode"
+
+#: includes/Gateway.php:289 includes/Gateway.php:358
+msgid "Cancel QR payment"
+msgstr "QR-betaling annuleren"
+
+#: includes/Gateway.php:296
+msgid "Payment QR code"
+msgstr "QR-code voor betaling"
+
+#: includes/Gateway.php:297
+msgid "Ask the customer to scan this with their banking app."
+msgstr "Laat de klant deze scannen met de bank-app."
+
+#: includes/Gateway.php:357
+msgid "Show QR code"
+msgstr "Toon QR-code"
+
+#: includes/Gateway.php:361
+msgid "Creating QR code…"
+msgstr "QR-code wordt aangemaakt…"
+
+#: includes/Gateway.php:363
+msgid "Waiting for the customer to scan…"
+msgstr "Wachten tot de klant scant…"
+
+#: includes/Gateway.php:364
+msgid "Mollie did not return a QR code. Try again or use the terminal."
+msgstr "Mollie heeft geen QR-code teruggestuurd. Probeer het opnieuw of gebruik de terminal."
