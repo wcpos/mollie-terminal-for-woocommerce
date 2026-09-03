@@ -43,7 +43,10 @@ class PaymentReconciler {
 		$method = (string) ( $payment['method'] ?? '' );
 		if ( $current && $current['payment_id'] === $payment_id && '' !== $current['method'] ) {
 			if ( $method !== $current['method'] ) { $errors[] = 'payment method mismatch'; }
-		} elseif ( ! in_array( $method, array( 'pointofsale', 'ideal', 'bancontact' ), true ) ) {
+		} elseif ( ! in_array( $method, array_merge( array( 'pointofsale' ), $this->settings->qr_methods() ), true ) ) {
+			// Attempts recorded before 0.5.0 carry no method, and the abandoned
+			// sweep reconciles payments that are no longer current. Only accept
+			// what this shop can actually have started.
 			$errors[] = 'payment method is not supported';
 		}
 		if ( isset( $payment['mode'] ) && $payment['mode'] !== $this->settings->mode() ) { $errors[] = 'environment mismatch'; }

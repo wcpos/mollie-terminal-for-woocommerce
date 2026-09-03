@@ -65,13 +65,16 @@ class MolliePaymentService {
 				$remote = $this->client->get_payment( $current['payment_id'], $current_include );
 				$result = $this->reconciler->reconcile( $order, $remote, 'create_reuse' );
 				$status = $result['payment_status'] ?? $result['status'] ?? '';
+				// The reused attempt may belong to the other channel than the one
+				// the cashier just picked; tell the panel which one it is.
+				$reused = array( 'reused' => true, 'method' => $current['method'], 'channel' => PaymentAttempt::is_qr_method( $current['method'] ) ? 'qr' : 'terminal' );
 				if ( in_array( $status, array( 'open', 'pending', 'authorized', 'paid' ), true ) ) {
 					Logger::log( 'Reusing active Mollie terminal payment.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'], 'status' => $status ), 'info' );
-					return $this->with_qr_code( array_merge( $result, array( 'payment' => $remote, 'reused' => true ) ), $remote );
+					return $this->with_qr_code( array_merge( $result, $reused, array( 'payment' => $remote ) ), $remote );
 				}
 				if ( ! PaymentAttempt::is_final_unpaid( (string) $status ) ) {
 					Logger::log( 'Reusing non-final Mollie terminal payment state.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'], 'status' => $status ), 'info' );
-					return array_merge( $result, array( 'reused' => true ) );
+					return array_merge( $result, $reused );
 				}
 			}
 			$payload = $build_payload();
@@ -79,7 +82,7 @@ class MolliePaymentService {
 			$payment = $this->client->create_payment( $payload, $include );
 			PaymentAttempt::record_new( $order, $payment, $terminal_id, $this->settings->mode(), $method );
 			Logger::log( 'Mollie terminal payment created.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => PaymentAttempt::payment_id( $payment ), 'status' => PaymentAttempt::payment_status( $payment ), 'terminal_id' => $terminal_id ), 'success' );
-			return $this->with_qr_code( array( 'status' => 'created', 'payment' => $payment ), $payment );
+			return $this->with_qr_code( array( 'status' => 'created', 'payment' => $payment, 'method' => $method, 'channel' => PaymentAttempt::is_qr_method( $method ) ? 'qr' : 'terminal' ), $payment );
 		} );
 	}
 

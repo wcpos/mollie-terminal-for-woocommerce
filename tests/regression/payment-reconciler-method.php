@@ -28,7 +28,7 @@ class FakeOrderForMethodVerification {
 	public function save() {}
 }
 
-function reconcile_method( string $recorded, string $remote ): array {
+function reconcile_method( string $recorded, string $remote, array $qr_methods = array( 'ideal', 'bancontact' ) ): array {
 	$order = new FakeOrderForMethodVerification( $recorded );
 	$payment = array(
 		'id' => 'tr_method',
@@ -38,7 +38,7 @@ function reconcile_method( string $recorded, string $remote ): array {
 		'amount' => array( 'value' => '12.34', 'currency' => 'EUR' ),
 		'metadata' => array( 'order_id' => '321' ),
 	);
-	return ( new PaymentReconciler( new Settings( array( 'mode' => 'live' ) ) ) )->reconcile( $order, $payment, 'test' );
+	return ( new PaymentReconciler( new Settings( array( 'mode' => 'live', 'qr_methods' => $qr_methods ) ) ) )->reconcile( $order, $payment, 'test' );
 }
 
 expect( 'open' === ( reconcile_method( 'ideal', 'ideal' )['status'] ?? '' ), 'a payment matching the recorded iDEAL method should pass' );
@@ -49,5 +49,11 @@ expect( 'open' === ( reconcile_method( '', 'bancontact' )['status'] ?? '' ), 'Ba
 $unsupported = reconcile_method( '', 'creditcard' );
 expect( 'verification_failed' === ( $unsupported['status'] ?? '' ), 'an unsupported unrecorded method should fail' );
 expect( in_array( 'payment method is not supported', $unsupported['errors'] ?? array(), true ), 'an unsupported method should be identified' );
+// A shop that never enabled QR must keep rejecting iDEAL/Bancontact payments
+// that reach the (unauthenticated) webhook without a matching recorded attempt.
+$disabled = reconcile_method( '', 'ideal', array() );
+expect( 'verification_failed' === ( $disabled['status'] ?? '' ), 'an unrecorded iDEAL payment must fail when QR is disabled' );
+expect( 'open' === ( reconcile_method( '', 'pointofsale', array() )['status'] ?? '' ), 'terminal payments must still pass when QR is disabled' );
+expect( 'verification_failed' === ( reconcile_method( '', 'bancontact', array( 'ideal' ) )['status'] ?? '' ), 'a QR method the shop did not enable must fail' );
 
 echo "payment-reconciler-method ok\n";

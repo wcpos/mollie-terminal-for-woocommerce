@@ -165,8 +165,13 @@ attempt is a QR payment, the payment status is `open`, and `src` starts with `da
 
 - If the current attempt matches `$payment['id']` and has a non-empty recorded method, the
   payment's method must equal it (error: `payment method mismatch`).
-- Otherwise the method must be one of `pointofsale`, `ideal`, `bancontact` (error: `payment
-  method is not supported`). This covers pre-existing attempts and abandoned-sweep payments.
+- Otherwise the method must be `pointofsale` or one of the QR methods the merchant enabled
+  (`Settings::qr_methods()`; error: `payment method is not supported`). This covers
+  pre-existing attempts and abandoned-sweep payments without loosening the guard on the
+  unauthenticated webhook for shops that never enabled QR.
+
+The start response (created or reused) also carries `channel` (`terminal`|`qr`) and `method`,
+so the panel can follow a reused attempt that lives on the other channel.
 
 ## JavaScript (`assets/js/payment.js`)
 

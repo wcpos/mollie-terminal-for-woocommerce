@@ -419,6 +419,22 @@
 		setActionMode(root, actionMode(root));
 	}
 
+	// Align the panel with the channel/method the server actually started or
+	// reused, so a reused terminal attempt is never presented as a QR payment.
+	function syncChannel(root, result) {
+		var data = result && result.json ? result.json.data : null;
+		var select = root.querySelector('.mtfwc-qr-method-select');
+		if (!data || !data.channel) {
+			return;
+		}
+		if (data.channel !== selectedChannel(root)) {
+			selectChannel(root, data.channel);
+		}
+		if (select && 'qr' === data.channel && data.method && select.value !== data.method) {
+			select.value = data.method;
+		}
+	}
+
 	// --- Auto-poll loop -------------------------------------------------------
 
 	function stopAutoPoll(root) {
@@ -620,6 +636,9 @@
 				setStatus(root, t('failed', 'Payment failed. You can try again.'), 'error');
 				resetToIdle(root);
 			} else {
+				// The server reuses any open attempt for this order, which may sit on
+				// the other channel than the one the cashier just picked. Follow it.
+				syncChannel(root, result);
 				var qrShown = showQr(root, resultQrCode(result));
 				startAutoPoll(root);
 				if ('qr' === selectedChannel(root) && !qrShown) {
