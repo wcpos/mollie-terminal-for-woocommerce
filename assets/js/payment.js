@@ -509,8 +509,16 @@
 			if (!root.mtfwcPoll || root.mtfwcPoll.id !== session) {
 				return;
 			}
-			var qrShown = showQr(root, resultQrCode(result));
-			var outcome = classify(resultStatus(result));
+			var status = resultStatus(result);
+			var qr = resultQrCode(result);
+			// Mollie only returns the QR while the payment is "open". Once the
+			// customer has scanned (pending/authorized) the code is spent — drop it
+			// so the cashier does not keep asking them to scan.
+			if (!qr && 'open' !== status) {
+				hideQr(root);
+			}
+			var qrShown = showQr(root, qr);
+			var outcome = classify(status);
 			if ('paid' === outcome) {
 				completeOrder(root, resultRedirect(result));
 			} else if ('failed' === outcome) {
@@ -524,6 +532,8 @@
 			} else {
 				if ('qr' !== selectedChannel(root)) {
 					setStatus(root, t('waiting', 'Waiting for terminal…'), 'info');
+				} else if ('open' !== status) {
+					setStatus(root, t('confirmingQr', 'Scanned — waiting for the bank to confirm…'), 'info');
 				} else if (qrShown || hasQr(root)) {
 					setStatus(root, t('waitingQr', 'Waiting for the customer to scan…'), 'info');
 				} else {

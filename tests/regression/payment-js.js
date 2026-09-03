@@ -460,6 +460,15 @@ async function flush() {
 	assert(/customer to scan/i.test(qrPanel.querySelector('.mtfwc-payment-status').textContent), 'QR polling should show its waiting message');
 	await fireTimers();
 	await resolveNext({ status: 'pending' }); // the earlier locked panel also polled
+	// Once the customer has scanned, Mollie stops returning the QR and the
+	// payment sits in "pending": the spent code must go and the cashier is told
+	// the bank is confirming, not asked to keep scanning.
+	await resolveNext({ status: 'pending' });
+	assert.strictEqual(qrCode.hidden, true, 'a pending QR payment should drop the spent QR code');
+	assert(/bank to confirm/i.test(qrPanel.querySelector('.mtfwc-payment-status').textContent), 'a pending QR payment should say the bank is confirming');
+	assert.strictEqual(qrAction.getAttribute('data-mtfwc-mode'), 'cancel', 'a pending QR payment keeps polling');
+	await fireTimers();
+	await resolveNext({ status: 'pending' }); // locked panel again
 	await resolveNext({ status: 'expired' });
 	assert.strictEqual(qrCode.hidden, true, 'a final payment state should hide the QR block');
 	assert.strictEqual(qrImage.getAttribute('src'), '', 'hiding the QR should clear the image source');

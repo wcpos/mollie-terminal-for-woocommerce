@@ -163,12 +163,16 @@ attempt is a QR payment, the payment status is `open`, and `src` starts with `da
 
 `PaymentReconciler::verify_payment()` replaces the hard `pointofsale` check with:
 
-- If the current attempt matches `$payment['id']` and has a non-empty recorded method, the
-  payment's method must equal it (error: `payment method mismatch`).
-- Otherwise the method must be `pointofsale` or one of the QR methods the merchant enabled
-  (`Settings::qr_methods()`; error: `payment method is not supported`). This covers
-  pre-existing attempts and abandoned-sweep payments without loosening the guard on the
-  unauthenticated webhook for shops that never enabled QR.
+- Look up the method this shop recorded for `$payment['id']`: the current attempt first,
+  then the attempt history (abandoned attempts keep their history entry), then the
+  abandoned-ID list.
+- Unknown payment ID → `payment is not known for this order`. Every payment the plugin
+  creates is written to history, so an unknown ID cannot pay this order even when its
+  `metadata.order_id` collides (shops sharing one Mollie profile).
+- Recorded method present → the payment's method must equal it (`payment method mismatch`).
+  This holds even if the merchant has since disabled that QR method.
+- Known ID without a recorded method (attempts from before 0.5.0) → the method must be
+  `pointofsale` or one of `Settings::qr_methods()` (`payment method is not supported`).
 
 The start response (created or reused) also carries `channel` (`terminal`|`qr`) and `method`,
 so the panel can follow a reused attempt that lives on the other channel.

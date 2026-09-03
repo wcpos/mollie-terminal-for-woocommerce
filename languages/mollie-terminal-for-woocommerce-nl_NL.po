@@ -387,5 +387,9 @@ msgid "Waiting for the customer to scan…"
 msgstr "Wachten tot de klant scant…"
 
 #: includes/Gateway.php:364
+msgid "Scanned — waiting for the bank to confirm…"
+msgstr "Gescand — wachten op bevestiging van de bank…"
+
+#: includes/Gateway.php:364
 msgid "Mollie did not return a QR code. Try again or use the terminal."
 msgstr "Mollie heeft geen QR-code teruggestuurd. Probeer het opnieuw of gebruik de terminal."

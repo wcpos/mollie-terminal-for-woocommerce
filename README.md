@@ -72,7 +72,9 @@ methods you accept under **WooCommerce → Settings → Payments → Mollie Term
 The plugin tracks QR payments through the same automatic Mollie polling and
 webhook flow as terminal payments. After paying on their phone, the customer
 lands on the WooCommerce order-received page. iDEAL QR can be tried with a
-Mollie test API key; Bancontact QR requires live mode.
+Mollie test API key; Bancontact QR requires live mode. Bancontact caps QR
+payments at €1,500.00 per transaction (a scheme limit, not a plugin one); for
+larger totals use the terminal.
 
 ## Stale payment cleanup
 

@@ -383,5 +383,9 @@ msgid "Waiting for the customer to scan…"
 msgstr ""
 
 #: includes/Gateway.php:364
+msgid "Scanned — waiting for the bank to confirm…"
+msgstr ""
+
+#: includes/Gateway.php:364
 msgid "Mollie did not return a QR code. Try again or use the terminal."
 msgstr ""

@@ -225,11 +225,13 @@ class Gateway extends WC_Payment_Gateway {
 		// to an idle panel while the payment lingers open on Mollie.
 		$resume = false;
 		$resume_channel = 'terminal';
+		$resume_method = '';
 		if ( $order && ! $order->is_paid() ) {
 			$current = PaymentAttempt::current( $order );
 			if ( $current && ! empty( $current['payment_id'] ) && PaymentAttempt::is_non_final( (string) ( $current['status'] ?? '' ) ) ) {
 				$resume = true;
-				$resume_channel = PaymentAttempt::is_qr_method( (string) ( $current['method'] ?? '' ) ) ? 'qr' : 'terminal';
+				$resume_method = (string) ( $current['method'] ?? '' );
+				$resume_channel = PaymentAttempt::is_qr_method( $resume_method ) ? 'qr' : 'terminal';
 			}
 		}
 
@@ -274,7 +276,8 @@ class Gateway extends WC_Payment_Gateway {
 				$labels = array( 'ideal' => __( 'iDEAL', 'mollie-terminal-for-woocommerce' ), 'bancontact' => __( 'Bancontact', 'mollie-terminal-for-woocommerce' ) );
 				if ( count( $qr_methods ) > 1 ) {
 					echo '<select id="mtfwc-qr-method-select" class="mtfwc-qr-method-select">';
-					foreach ( $qr_methods as $method ) { echo '<option value="' . esc_attr( $method ) . '">' . esc_html( $labels[ $method ] ) . '</option>'; }
+					// A resumed QR attempt keeps the method it was started with selected.
+					foreach ( $qr_methods as $method ) { echo '<option value="' . esc_attr( $method ) . '"' . ( $method === $resume_method ? ' selected' : '' ) . '>' . esc_html( $labels[ $method ] ) . '</option>'; }
 					echo '</select>';
 				} else {
 					echo '<span class="mtfwc-qr-method-single" data-method="' . esc_attr( $qr_methods[0] ) . '">' . esc_html( $labels[ $qr_methods[0] ] ) . '</span>';
@@ -361,6 +364,7 @@ class Gateway extends WC_Payment_Gateway {
 					'sendingQr' => __( 'Creating QR code…', 'mollie-terminal-for-woocommerce' ),
 					'waiting' => __( 'Waiting for terminal…', 'mollie-terminal-for-woocommerce' ),
 					'waitingQr' => __( 'Waiting for the customer to scan…', 'mollie-terminal-for-woocommerce' ),
+					'confirmingQr' => __( 'Scanned — waiting for the bank to confirm…', 'mollie-terminal-for-woocommerce' ),
 					'qrUnavailable' => __( 'Mollie did not return a QR code. Try again or use the terminal.', 'mollie-terminal-for-woocommerce' ),
 					'completing' => __( 'Payment complete — finishing order…', 'mollie-terminal-for-woocommerce' ),
 					'selectTerminal' => __( 'Select a terminal first.', 'mollie-terminal-for-woocommerce' ),
