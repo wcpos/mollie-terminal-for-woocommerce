@@ -18,6 +18,7 @@ class AjaxHandler {
 
 	public function mtfwc_start_payment(): void {
 		$this->with_order( 'start_payment', function ( $order ) {
+			$this->require_gateway_enabled();
 			$channel     = 'qr' === sanitize_text_field( wp_unslash( $_POST['channel'] ?? 'terminal' ) ) ? 'qr' : 'terminal';
 			$terminal_id = sanitize_text_field( wp_unslash( $_POST['terminal_id'] ?? '' ) );
 			$qr_method   = sanitize_text_field( wp_unslash( $_POST['qr_method'] ?? '' ) );
@@ -122,7 +123,6 @@ class AjaxHandler {
 			if ( ! $this->can_access_order( $order_id ) ) {
 				wp_send_json_error( __( 'Unauthorized request.', 'mollie-terminal-for-woocommerce' ), 403 );
 			}
-			$this->require_gateway_enabled();
 			Logger::log( 'Mollie Terminal AJAX request received.', array( 'operation' => $operation, 'order_id' => $order_id ), 'info' );
 			$order = wc_get_order( $order_id );
 			if ( ! $order ) {
@@ -152,9 +152,11 @@ class AjaxHandler {
 
 	/**
 	 * "Disabled" in WooCommerce → Payments must mean disabled: the checkout
-	 * actions stay registered while the plugin is active, so they check the
-	 * gateway switch themselves. The webhook is deliberately not gated — a
-	 * payment already in flight must still settle.
+	 * actions stay registered while the plugin is active, so starting a
+	 * payment and listing terminals check the gateway switch themselves.
+	 * Poll and cancel are deliberately not gated (nor is the webhook): a
+	 * payment already in flight must still settle, and the cashier must keep
+	 * the ability to cancel it, even if the gateway was switched off meanwhile.
 	 */
 	private function require_gateway_enabled(): void {
 		if ( ! $this->settings()->enabled() ) {

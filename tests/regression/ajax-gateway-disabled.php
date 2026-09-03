@@ -21,7 +21,20 @@ $log_calls = array();
 class CapturingWooLoggerForGatewayDisabled { public function log( $level, $message, $context = array() ) { global $log_calls; $log_calls[] = $message; } }
 function wc_get_logger() { return new CapturingWooLoggerForGatewayDisabled(); }
 
-class FakeOrderForGatewayDisabled { public function get_id() { return 123; } public function is_paid() { return false; } }
+// Transient stubs for PaymentLock (cancel takes the per-order lock).
+$transients = array();
+function get_transient( $key ) { global $transients; return $transients[ $key ] ?? false; }
+function set_transient( $key, $value, $ttl = 0 ) { global $transients; $transients[ $key ] = $value; return true; }
+function delete_transient( $key ) { global $transients; unset( $transients[ $key ] ); return true; }
+function sanitize_key( $key ) { return strtolower( preg_replace( '/[^A-Za-z0-9_\-]/', '', (string) $key ) ); }
+
+// An order with no payment attempt: poll and cancel answer "idle" without
+// touching Mollie, which is all we need to prove they were not refused.
+class FakeOrderForGatewayDisabled {
+	public function get_id() { return 123; }
+	public function is_paid() { return false; }
+	public function get_meta( $key ) { return null; }
+}
 function wc_get_order( $id ) { return 123 === (int) $id ? new FakeOrderForGatewayDisabled() : false; }
 
 class JsonResponseForGatewayDisabled extends Error {
@@ -34,6 +47,13 @@ function wp_send_json_success( $data = null, $status_code = null ) { throw new J
 
 require_once __DIR__ . '/../../includes/Logger.php';
 require_once __DIR__ . '/../../includes/Settings.php';
+require_once __DIR__ . '/../../includes/Utils/Money.php';
+require_once __DIR__ . '/../../includes/PaymentAttempt.php';
+require_once __DIR__ . '/../../includes/PaymentLock.php';
+require_once __DIR__ . '/../../includes/PaymentReconciler.php';
+require_once __DIR__ . '/../../includes/Services/MollieApiClient.php';
+require_once __DIR__ . '/../../includes/Services/TerminalService.php';
+require_once __DIR__ . '/../../includes/Services/MolliePaymentService.php';
 require_once __DIR__ . '/../../includes/AjaxHandler.php';
 
 use WCPOS\WooCommercePOS\MollieTerminal\AjaxHandler;
@@ -52,16 +72,25 @@ function call_action( string $action, array $settings, array $post = array() ): 
 	exit( 1 );
 }
 
-foreach ( array( 'mtfwc_start_payment', 'mtfwc_poll_payment', 'mtfwc_cancel_payment', 'mtfwc_list_terminals' ) as $action ) {
-	$response = call_action( $action, array( 'enabled' => 'no', 'qr_methods' => array( 'ideal' ) ), array( 'channel' => 'qr', 'qr_method' => 'ideal' ) );
+$disabled = array( 'enabled' => 'no', 'qr_methods' => array( 'ideal' ) );
+foreach ( array( 'mtfwc_start_payment', 'mtfwc_list_terminals' ) as $action ) {
+	$response = call_action( $action, $disabled, array( 'channel' => 'qr', 'qr_method' => 'ideal' ) );
 	expect( 403 === $response->status, "$action must be refused while the gateway is disabled" );
 	expect( 'Mollie Terminal is disabled.' === $response->data, "$action should say the gateway is disabled" );
-	expect( array() === $log_calls, "$action must not log a request it refused" );
+}
+
+// Poll and cancel act on a payment that already exists, so they must keep
+// working after the gateway is switched off: the cashier can still see it
+// settle or cancel it. With no attempt on the order they answer "idle".
+foreach ( array( 'mtfwc_poll_payment', 'mtfwc_cancel_payment' ) as $action ) {
+	$response = call_action( $action, $disabled );
+	expect( 200 === $response->status, "$action must still reach the payment service while the gateway is disabled" );
+	expect( 'idle' === ( $response->data['status'] ?? '' ), "$action should report the order's payment state as usual" );
 }
 
 // A missing 'enabled' option (never saved) counts as disabled, matching the
 // gateway's own default.
-expect( 403 === call_action( 'mtfwc_poll_payment', array() )->status, 'an unsaved gateway must be treated as disabled' );
+expect( 403 === call_action( 'mtfwc_start_payment', array() )->status, 'an unsaved gateway must be treated as disabled' );
 
 // With the gateway enabled the request proceeds past the guard: the QR method
 // check is the next gate, so a disabled QR method now yields 400, not 403.
