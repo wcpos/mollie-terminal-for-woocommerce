@@ -151,15 +151,19 @@ class AjaxHandler {
 	}
 
 	/**
-	 * "Disabled" in WooCommerce → Payments must mean disabled: the checkout
-	 * actions stay registered while the plugin is active, so starting a
-	 * payment and listing terminals check the gateway switch themselves.
+	 * A gateway switched off everywhere must stay off: the checkout actions
+	 * stay registered while the plugin is active, so starting a payment and
+	 * listing terminals check the switches themselves. There are two: the
+	 * WooCommerce → Payments checkbox (online store) and POS → Settings →
+	 * Checkout (WooCommerce POS), and either one counts — POS merchants
+	 * routinely leave the WooCommerce one off (the 0.5.1 guard only looked at
+	 * that one and locked every such POS out of taking payments).
 	 * Poll and cancel are deliberately not gated (nor is the webhook): a
 	 * payment already in flight must still settle, and the cashier must keep
 	 * the ability to cancel it, even if the gateway was switched off meanwhile.
 	 */
 	private function require_gateway_enabled(): void {
-		if ( ! $this->settings()->enabled() ) {
+		if ( ! $this->settings()->active() ) {
 			wp_send_json_error( __( 'Mollie Terminal is disabled.', 'mollie-terminal-for-woocommerce' ), 403 );
 		}
 	}

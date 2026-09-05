@@ -2,6 +2,13 @@
 
 All notable changes to Mollie Terminal for WooCommerce will be documented in this file.
 
+## 0.5.3 - 2026-09-05
+
+### Fixed
+
+- **POS payments were refused when the WooCommerce → Payments checkbox was off.** The 0.5.1 guard treated that checkbox as the only gateway switch, but WooCommerce POS enables gateways from POS → Settings → Checkout and ignores the WooCommerce one, so every POS-only setup (the recommended configuration) got "Mollie Terminal is disabled." when starting a payment or listing terminals. The guard now honours either switch: a gateway enabled in WooCommerce or in WooCommerce POS can take payments; one switched off in both places is still refused.
+- The Enable/Disable checkbox is relabelled "Enable Mollie Terminal for web checkout (not necessary for WooCommerce POS)" with a description explaining where the POS switch lives, matching the other WCPOS terminal plugins. The old "for checkout/POS" label implied the POS needed it.
+
 ## 0.5.2 - 2026-09-03
 
 ### Fixed

@@ -40,8 +40,23 @@ class Settings {
 		return trim( (string) get_option( $option, '' ) );
 	}
 
-	/** Whether the merchant has the gateway switched on in WooCommerce → Payments. */
+	/** Whether the merchant has the gateway switched on in WooCommerce → Payments (online store only). */
 	public function enabled(): bool { return 'yes' === $this->get( 'enabled', 'no' ); }
+
+	/**
+	 * Whether WooCommerce POS has this gateway switched on under
+	 * POS → Settings → Checkout. WooCommerce POS forces a gateway enabled from its
+	 * own settings and ignores the WooCommerce → Payments switch, so merchants
+	 * routinely leave that switch off for a POS-only terminal.
+	 */
+	public function enabled_for_pos(): bool {
+		if ( ! function_exists( 'woocommerce_pos_get_settings' ) ) { return false; }
+		$settings = woocommerce_pos_get_settings( 'payment_gateways' );
+		return is_array( $settings ) && ! empty( $settings['gateways'][ self::GATEWAY_ID ]['enabled'] );
+	}
+
+	/** Whether the gateway is switched on anywhere: online store or WooCommerce POS. */
+	public function active(): bool { return $this->enabled() || $this->enabled_for_pos(); }
 	public function api_key_source(): string { return 'mollie' === $this->get( 'api_key_source', 'own' ) ? 'mollie' : 'own'; }
 	public function profile_id(): string { return (string) $this->get( 'profile_id', '' ); }
 	public function mode(): string { return 'live' === $this->get( 'mode', 'test' ) ? 'live' : 'test'; }

@@ -26,7 +26,20 @@ class Gateway extends WC_Payment_Gateway {
 
 	public function init_form_fields(): void {
 		$this->form_fields = array(
-			'enabled' => array( 'title' => __( 'Enable/Disable', 'mollie-terminal-for-woocommerce' ), 'type' => 'checkbox', 'label' => __( 'Enable Mollie Terminal for checkout/POS.', 'mollie-terminal-for-woocommerce' ), 'default' => 'no' ),
+			'enabled' => array(
+				'title'       => __( 'Enable/Disable', 'mollie-terminal-for-woocommerce' ),
+				'type'        => 'checkbox',
+				// This switch governs the online store only. WooCommerce POS enables
+				// the gateway from POS → Settings → Checkout, whether or not it is
+				// enabled here; a bare "for checkout/POS" implied the POS needed it.
+				'label'       => sprintf(
+					/* translators: %s: link to WooCommerce POS. */
+					__( 'Enable Mollie Terminal for web checkout (not necessary for %s)', 'mollie-terminal-for-woocommerce' ),
+					'<a href="https://wcpos.com" target="_blank">WooCommerce POS</a>'
+				),
+				'description' => __( 'This enables the gateway for online store checkout. WooCommerce POS uses this gateway once it is enabled under POS → Settings → Checkout, whether or not it is enabled here.', 'mollie-terminal-for-woocommerce' ),
+				'default'     => 'no',
+			),
 			'title' => array( 'title' => __( 'Title', 'mollie-terminal-for-woocommerce' ), 'type' => 'text', 'default' => __( 'Mollie Terminal', 'mollie-terminal-for-woocommerce' ) ),
 			'description' => array( 'title' => __( 'Description', 'mollie-terminal-for-woocommerce' ), 'type' => 'textarea', 'default' => __( 'Pay in person using Mollie Terminal.', 'mollie-terminal-for-woocommerce' ) ),
 			'mode' => array( 'title' => __( 'Mode', 'mollie-terminal-for-woocommerce' ), 'type' => 'select', 'default' => 'test', 'options' => array( 'test' => __( 'Test', 'mollie-terminal-for-woocommerce' ), 'live' => __( 'Live', 'mollie-terminal-for-woocommerce' ) ) ),
