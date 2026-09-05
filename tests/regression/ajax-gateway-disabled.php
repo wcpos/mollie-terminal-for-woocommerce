@@ -6,6 +6,11 @@ function expect( $condition, $message = 'expectation failed' ) { if ( ! $conditi
 
 $options = array();
 function get_option( $key, $default = false ) { global $options; return array_key_exists( $key, $options ) ? $options[ $key ] : $default; }
+
+// WooCommerce POS → Settings → Checkout stub. POS forces a gateway enabled from
+// this blob and ignores the WooCommerce → Payments checkbox entirely.
+$pos_settings = array();
+function wcpos_get_settings( $id, $key = null ) { global $pos_settings; return $pos_settings; }
 function absint( $value ) { return abs( (int) $value ); }
 function sanitize_text_field( $value ) { return (string) $value; }
 function wp_unslash( $value ) { return $value; }
@@ -91,6 +96,25 @@ foreach ( array( 'mtfwc_poll_payment', 'mtfwc_cancel_payment' ) as $action ) {
 // A missing 'enabled' option (never saved) counts as disabled, matching the
 // gateway's own default.
 expect( 403 === call_action( 'mtfwc_start_payment', array() )->status, 'an unsaved gateway must be treated as disabled' );
+
+// The WooCommerce → Payments checkbox governs the online store only. A POS-only
+// merchant leaves it off and enables the gateway under POS → Settings →
+// Checkout instead, so that switch alone must let payments start and
+// terminals list (the 0.5.1 guard ignored it and locked those shops out).
+$pos_settings = array( 'default_gateway' => 'pos_cash', 'gateways' => array( 'mollie_terminal_for_woocommerce' => array( 'enabled' => true, 'order' => 2 ) ) );
+$pos_only = call_action( 'mtfwc_start_payment', $disabled, array( 'channel' => 'qr', 'qr_method' => 'bancontact' ) );
+expect( 400 === $pos_only->status, 'the POS switch alone must let start_payment past the gateway guard' );
+expect( 'Mollie Terminal is disabled.' !== $pos_only->data, 'start_payment must not report the gateway as disabled when POS has it on' );
+$pos_only_list = call_action( 'mtfwc_list_terminals', array() );
+expect( 'Mollie Terminal is disabled.' !== $pos_only_list->data, 'the POS switch alone must let list_terminals past the gateway guard' );
+
+// POS lists the gateway but has it switched off: that is not enabled.
+$pos_settings['gateways']['mollie_terminal_for_woocommerce']['enabled'] = false;
+expect( 403 === call_action( 'mtfwc_start_payment', $disabled )->status, 'a gateway switched off in both places must be refused' );
+// Unknown-section errors from WooCommerce POS (e.g. WP_Error) never count as enabled.
+$pos_settings = 'not-an-array';
+expect( 403 === call_action( 'mtfwc_start_payment', $disabled )->status, 'a non-array POS settings result must not enable the gateway' );
+$pos_settings = array();
 
 // With the gateway enabled the request proceeds past the guard: the QR method
 // check is the next gate, so a disabled QR method now yields 400, not 403.

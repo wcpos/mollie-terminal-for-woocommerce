@@ -61,9 +61,14 @@ msgstr "Standaardterminal"
 msgid "Description"
 msgstr "Omschrijving"
 
+#. translators: %s: link to WooCommerce POS.
 #: includes/Gateway.php:29
-msgid "Enable Mollie Terminal for checkout/POS."
-msgstr "Mollie Terminal inschakelen voor afrekenen/kassa."
+msgid "Enable Mollie Terminal for web checkout (not necessary for %s)"
+msgstr "Mollie Terminal inschakelen voor de webshop (niet nodig voor %s)"
+
+#: includes/Gateway.php:29
+msgid "This enables the gateway for online store checkout. WooCommerce POS uses this gateway once it is enabled under POS → Settings → Checkout, whether or not it is enabled here."
+msgstr "Hiermee schakel je de gateway in voor de webshop. WooCommerce POS gebruikt deze gateway zodra hij is ingeschakeld onder POS → Instellingen → Afrekenen, ongeacht of hij hier is ingeschakeld."
 
 #: includes/Gateway.php:29
 msgid "Enable/Disable"

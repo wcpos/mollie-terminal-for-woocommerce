@@ -2,7 +2,7 @@
 # This file is distributed under the GPL v3 or later.
 msgid ""
 msgstr ""
-"Project-Id-Version: Mollie Terminal for WooCommerce 0.5.0\n"
+"Project-Id-Version: Mollie Terminal for WooCommerce 0.5.3\n"
 "Report-Msgid-Bugs-To: https://github.com/wcpos/mollie-terminal-for-woocommerce/issues\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -57,8 +57,13 @@ msgstr ""
 msgid "Description"
 msgstr ""
 
+#. translators: %s: link to WooCommerce POS.
 #: includes/Gateway.php:29
-msgid "Enable Mollie Terminal for checkout/POS."
+msgid "Enable Mollie Terminal for web checkout (not necessary for %s)"
+msgstr ""
+
+#: includes/Gateway.php:29
+msgid "This enables the gateway for online store checkout. WooCommerce POS uses this gateway once it is enabled under POS → Settings → Checkout, whether or not it is enabled here."
 msgstr ""
 
 #: includes/Gateway.php:29
