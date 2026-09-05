@@ -50,8 +50,10 @@ class Settings {
 	 * routinely leave that switch off for a POS-only terminal.
 	 */
 	public function enabled_for_pos(): bool {
-		if ( ! function_exists( 'woocommerce_pos_get_settings' ) ) { return false; }
-		$settings = woocommerce_pos_get_settings( 'payment_gateways' );
+		// wcpos_get_settings() is the maintained helper; woocommerce_pos_get_settings() is its deprecated alias.
+		$getter = function_exists( 'wcpos_get_settings' ) ? 'wcpos_get_settings' : 'woocommerce_pos_get_settings';
+		if ( ! function_exists( $getter ) ) { return false; }
+		$settings = $getter( 'payment_gateways' );
 		return is_array( $settings ) && ! empty( $settings['gateways'][ self::GATEWAY_ID ]['enabled'] );
 	}
 

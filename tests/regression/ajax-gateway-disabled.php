@@ -10,7 +10,7 @@ function get_option( $key, $default = false ) { global $options; return array_ke
 // WooCommerce POS → Settings → Checkout stub. POS forces a gateway enabled from
 // this blob and ignores the WooCommerce → Payments checkbox entirely.
 $pos_settings = array();
-function woocommerce_pos_get_settings( $id, $key = null ) { global $pos_settings; return $pos_settings; }
+function wcpos_get_settings( $id, $key = null ) { global $pos_settings; return $pos_settings; }
 function absint( $value ) { return abs( (int) $value ); }
 function sanitize_text_field( $value ) { return (string) $value; }
 function wp_unslash( $value ) { return $value; }
