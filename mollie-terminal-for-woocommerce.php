@@ -65,6 +65,7 @@ add_action( 'init', __NAMESPACE__ . '\\load_textdomain' );
 
 function init(): void {
 	add_filter( 'woocommerce_payment_gateways', array( Gateway::class, 'register_gateway' ) );
+	add_action( 'woocommerce_create_refund', array( RefundHandler::class, 'remember_refund' ), 10, 2 );
 	new AjaxHandler();
 	new WebhookHandler();
 	new PaymentCleanup();

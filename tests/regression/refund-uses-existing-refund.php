@@ -35,6 +35,7 @@ class FakeRefund {
 	private $amount;
 	public function __construct( $id, $amount ) { $this->id = $id; $this->amount = $amount; }
 	public function get_id() { return $this->id; }
+	public function get_parent_id() { return 123; }
 	public function get_amount() { return $this->amount; }
 	public function get_meta( $key ) { return $this->meta[ $key ] ?? ''; }
 	public function update_meta_data( $key, $value ) { $this->meta[ $key ] = $value; }
@@ -79,5 +80,20 @@ $result = ( new RefundHandler( $client ) )->process_refund( $order, '10.00' );
 expect( is_wp_error( $result ) && 'mtfwc_refund_not_found' === $result->get_error_code(), 'no matching refund must return mtfwc_refund_not_found' );
 expect( 0 === $client->calls, 'no matching refund must not call Mollie' );
 expect( array() === $different->meta && ! $different->saved && $original_older == $older, 'a missing match must leave refunds untouched' );
+
+// The woocommerce_create_refund hook binds the gateway to the exact refund of
+// this request, even when a newer same-amount refund exists (two refunds in
+// flight); the remembered refund is consumed so it cannot leak to the next call.
+$exact = new FakeRefund( 13, '10.00' );
+$other = new FakeRefund( 14, '10.00' );
+$order = new FakeOrderForRefund( array( $other, $exact ) );
+$client = new FakeRefundClient();
+RefundHandler::remember_refund( $exact, array() );
+$result = ( new RefundHandler( $client ) )->process_refund( $order, '10.00' );
+expect( 're_new' === $exact->get_meta( RefundReconciler::META_MOLLIE_REFUND_ID ) && '13' === $client->payload['metadata']['woo_refund_id'], 'the remembered refund must be the one reconciled' );
+expect( array() === $other->meta && ! $other->saved, 'the newer same-amount refund must be untouched' );
+$client = new FakeRefundClient();
+$result = ( new RefundHandler( $client ) )->process_refund( $order, '10.00' );
+expect( 're_new' === $other->get_meta( RefundReconciler::META_MOLLIE_REFUND_ID ), 'without a remembered refund the newest unlinked match is used' );
 
 echo "refund-uses-existing-refund ok\n";
