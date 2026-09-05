@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Mollie Terminal for WooCommerce
  * Description: Adds Mollie Terminal support to WooCommerce for in-person payments.
- * Version:     0.5.3
+ * Version:     0.5.4
  * Author:      kilbot
  * Author URI:  https://kilbot.com/
  * Update URI:  https://github.com/wcpos/mollie-terminal-for-woocommerce
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'MTFWC_VERSION', '0.5.3' );
+define( 'MTFWC_VERSION', '0.5.4' );
 define( 'MTFWC_PLUGIN_FILE', __FILE__ );
 define( 'MTFWC_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'MTFWC_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -65,6 +65,7 @@ add_action( 'init', __NAMESPACE__ . '\\load_textdomain' );
 
 function init(): void {
 	add_filter( 'woocommerce_payment_gateways', array( Gateway::class, 'register_gateway' ) );
+	add_action( 'woocommerce_create_refund', array( RefundHandler::class, 'remember_refund' ), 10, 2 );
 	new AjaxHandler();
 	new WebhookHandler();
 	new PaymentCleanup();

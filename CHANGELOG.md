@@ -2,6 +2,12 @@
 
 All notable changes to Mollie Terminal for WooCommerce will be documented in this file.
 
+## 0.5.4 - 2026-09-05
+
+### Fixed
+
+- Refunds now reuse the refund record WooCommerce just created instead of creating a duplicate that double-counted refunded totals. If no matching refund exists, the request is rejected without contacting Mollie.
+
 ## 0.5.3 - 2026-09-05
 
 ### Fixed
