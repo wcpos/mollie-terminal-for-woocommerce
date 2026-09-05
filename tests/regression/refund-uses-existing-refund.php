@@ -88,12 +88,29 @@ $exact = new FakeRefund( 13, '10.00' );
 $other = new FakeRefund( 14, '10.00' );
 $order = new FakeOrderForRefund( array( $other, $exact ) );
 $client = new FakeRefundClient();
-RefundHandler::remember_refund( $exact, array() );
+RefundHandler::remember_refund( $exact, array( 'refund_payment' => true ) );
 $result = ( new RefundHandler( $client ) )->process_refund( $order, '10.00' );
 expect( 're_new' === $exact->get_meta( RefundReconciler::META_MOLLIE_REFUND_ID ) && '13' === $client->payload['metadata']['woo_refund_id'], 'the remembered refund must be the one reconciled' );
 expect( array() === $other->meta && ! $other->saved, 'the newer same-amount refund must be untouched' );
 $client = new FakeRefundClient();
 $result = ( new RefundHandler( $client ) )->process_refund( $order, '10.00' );
 expect( 're_new' === $other->get_meta( RefundReconciler::META_MOLLIE_REFUND_ID ), 'without a remembered refund the newest unlinked match is used' );
+
+// A refund that did not ask for a payment reversal (manual refund) is never
+// remembered, and a remembered record whose amount differs from the request
+// (or that is already linked) is discarded rather than reused.
+$manual = new FakeRefund( 15, '10.00' );
+RefundHandler::remember_refund( $manual, array( 'refund_payment' => false ) );
+$fresh = new FakeRefund( 16, '10.00' );
+$order = new FakeOrderForRefund( array( $fresh, $manual ) );
+$client = new FakeRefundClient();
+( new RefundHandler( $client ) )->process_refund( $order, '10.00' );
+expect( array() === $manual->meta && 're_new' === $fresh->get_meta( RefundReconciler::META_MOLLIE_REFUND_ID ), 'a manual refund must not be remembered; the unlinked match is used instead' );
+$stale = new FakeRefund( 17, '5.00' );
+RefundHandler::remember_refund( $stale, array( 'refund_payment' => true ) );
+$order = new FakeOrderForRefund( array( $stale ) );
+$client = new FakeRefundClient();
+$result = ( new RefundHandler( $client ) )->process_refund( $order, '10.00' );
+expect( is_wp_error( $result ) && 'mtfwc_refund_not_found' === $result->get_error_code() && array() === $stale->meta && 0 === $client->calls, 'a remembered refund with a different amount must be discarded, not reused' );
 
 echo "refund-uses-existing-refund ok\n";
