@@ -35,6 +35,11 @@ class FakeRefund {
 	private $amount;
 	public function __construct( $id, $amount ) { $this->id = $id; $this->amount = $amount; }
 	public function get_id() { return $this->id; }
+	public $payment_method = '';
+	public $payment_method_title = '';
+	public function get_payment_method() { return $this->payment_method; }
+	public function set_payment_method( $m ) { $this->payment_method = (string) $m; }
+	public function set_payment_method_title( $t ) { $this->payment_method_title = (string) $t; }
 	public function get_parent_id() { return 123; }
 	public function get_amount() { return $this->amount; }
 	public function get_meta( $key ) { return $this->meta[ $key ] ?? ''; }
@@ -45,6 +50,11 @@ class FakeOrderForRefund {
 	public $refunds;
 	public function __construct( array $refunds ) { $this->refunds = $refunds; }
 	public function get_id() { return 123; }
+	public $payment_method = '';
+	public $payment_method_title = '';
+	public function get_payment_method() { return $this->payment_method; }
+	public function set_payment_method( $m ) { $this->payment_method = (string) $m; }
+	public function set_payment_method_title( $t ) { $this->payment_method_title = (string) $t; }
 	public function get_refunds() { return $this->refunds; }
 	public function get_transaction_id() { return 'tr_paid'; }
 	public function get_currency() { return 'EUR'; }

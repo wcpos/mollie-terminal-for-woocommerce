@@ -2,6 +2,12 @@
 
 All notable changes to Mollie Terminal for WooCommerce will be documented in this file.
 
+## 0.5.5 - 2026-09-08
+
+### Fixed
+
+- **POS orders paid with Mollie ignored the per-gateway order status.** WooCommerce POS picks the status for a paid order from the gateway recorded on the order, but a Mollie payment is created and completed over AJAX or the webhook, never through the WooCommerce pay form that records the chosen gateway. The order kept an empty or default (cash) payment method, so the POS fell back to "Completed" whatever was configured for Mollie Terminal under POS → Settings → Checkout. The gateway is now recorded on the order when a terminal or QR payment starts, and again just before the order is marked paid, so the configured status is honoured on the poll, the webhook and the stale-payment sweep. Orders also show "Mollie Terminal" as their payment method while a payment is in flight, and WooCommerce routes refunds for them to this gateway.
+
 ## 0.5.4 - 2026-09-05
 
 ### Fixed

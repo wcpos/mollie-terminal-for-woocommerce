@@ -22,6 +22,11 @@ class FakeOrderForMethodVerification {
 		if ( $history ) { $this->meta[ PaymentAttempt::META_ATTEMPTS ] = $history; }
 	}
 	public function get_id() { return 321; }
+	public $payment_method = '';
+	public $payment_method_title = '';
+	public function get_payment_method() { return $this->payment_method; }
+	public function set_payment_method( $m ) { $this->payment_method = (string) $m; }
+	public function set_payment_method_title( $t ) { $this->payment_method_title = (string) $t; }
 	public function get_total() { return '12.34'; }
 	public function get_currency() { return 'EUR'; }
 	public function get_meta( $key ) { return $this->meta[ $key ] ?? null; }

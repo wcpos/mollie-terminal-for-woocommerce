@@ -33,6 +33,11 @@ class FakeOrderForQrPayload {
 	public $meta = array();
 	public function is_paid() { return false; }
 	public function get_id() { return 12345; }
+	public $payment_method = '';
+	public $payment_method_title = '';
+	public function get_payment_method() { return $this->payment_method; }
+	public function set_payment_method( $m ) { $this->payment_method = (string) $m; }
+	public function set_payment_method_title( $t ) { $this->payment_method_title = (string) $t; }
 	public function get_total() { return '12.34'; }
 	public function get_currency() { return 'EUR'; }
 	public function get_order_number() { return 'QR-123'; }
