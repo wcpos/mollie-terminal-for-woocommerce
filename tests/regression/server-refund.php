@@ -38,6 +38,12 @@ class RefundClient extends MollieApiClient {
 	public function __construct() {}
 	public function get_payment( string $payment_id, array $include = array() ): array { $this->calls[] = $payment_id; return array( 'amount' => array( 'value' => '30.00' ) ); }
 	public function list_refunds( string $payment_id ): array { $this->calls[] = $payment_id; return $this->refunds; }
+	public $refreshed = null;
+	public function get_refund( string $payment_id, string $refund_id ): array {
+		$this->calls[] = 'refund:' . $refund_id;
+		if ( $this->refreshed instanceof Exception ) { throw $this->refreshed; }
+		return array( 'id' => $refund_id, 'status' => $this->refreshed );
+	}
 	public function create_refund( string $payment_id, array $payload ): array {
 		$this->calls[] = $payment_id;
 		expect( 'Returned item' === $payload['description'] && '5.00' === $payload['amount']['value'], 'refund amount/reason' );
@@ -56,7 +62,12 @@ foreach ( array( 'refunded' => 'succeeded', 'queued' => 'pending', 'pending' => 
 	$result = $provider->refund( $row, 456, '5.00' );
 	expect( array( 'status' => $expected, 'provider_ref' => 're_x' ) === $result, 'refund map: ' . $status );
 	expect( array( 'tr_explicit', 'tr_explicit', 'tr_explicit' ) === $client->calls, 'explicit row ref used without order transaction' );
-	expect( $result === $provider->refund( $row, 456, '5.00' ) && 3 === count( $client->calls ), 'stored refund id/status avoids duplicate API call' );
+	$client->refreshed = new RuntimeException( 'offline' );
+	expect( $result === $provider->refund( $row, 456, '5.00' ) && array( 'tr_explicit', 'tr_explicit', 'tr_explicit', 'refund:re_x' ) === $client->calls, 'replay re-reads the stored refund and keeps the last status when Mollie is unreachable' );
+	$client->refreshed = 'refunded';
+	expect( array( 'status' => 'succeeded', 'provider_ref' => 're_x' ) === $provider->refund( $row, 456, '5.00' ) && 'refunded' === $orders[456]->meta[ RefundReconciler::META_STATUS ], 'replay refreshes a settled refund: ' . $status );
+	$client->refreshed = 'failed';
+	expect( array( 'status' => 'failed', 'provider_ref' => 're_x' ) === $provider->refund( $row, 456, '5.00' ), 'replay refreshes a failed refund' );
 }
 $orders[456] = new WC_Order_Refund();
 $orders[456]->meta[ RefundReconciler::META_ATTEMPT_ID ] = 'attempt';

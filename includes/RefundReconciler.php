@@ -15,12 +15,12 @@ class RefundReconciler {
 
 	public function refund( $order, $woo_refund, string $amount, string $reason = '', ?string $payment_id = null ): array {
 		return PaymentLock::with_lock( (int) $order->get_id(), 'refund', function () use ( $order, $woo_refund, $amount, $reason, $payment_id ) {
-			$existing = $woo_refund->get_meta( self::META_MOLLIE_REFUND_ID );
-			if ( $existing ) { return array( 'status' => 'already_refunded', 'refund_id' => $existing, 'mollie_status' => (string) $woo_refund->get_meta( self::META_STATUS ) ); }
 			if ( null === $payment_id ) {
 				$payment_id = (string) $order->get_transaction_id();
 				if ( '' === $payment_id ) { $current = PaymentAttempt::current( $order ); $payment_id = $current['payment_id'] ?? ''; }
 			}
+			$existing = (string) $woo_refund->get_meta( self::META_MOLLIE_REFUND_ID );
+			if ( '' !== $existing ) { return $this->refresh_refund( $woo_refund, $existing, $payment_id ); }
 			if ( '' === $payment_id ) { throw new RuntimeException( 'No Mollie payment found for refund.' ); }
 			$payment = $this->client->get_payment( $payment_id );
 			$refunds = $this->refund_items( $this->client->list_refunds( $payment_id ) );
@@ -38,6 +38,24 @@ class RefundReconciler {
 			$refund = $this->client->create_refund( $payment_id, $payload );
 			return $this->store_refund( $woo_refund, $refund, $amount );
 		} );
+	}
+
+	/**
+	 * A refund Mollie first reported as queued/pending/processing settles later and
+	 * nothing else re-reads it (payment webhooks carry the payment, not its refunds),
+	 * so a replay refreshes the stored status; Mollie being unreachable keeps the last one.
+	 */
+	private function refresh_refund( $woo_refund, string $refund_id, string $payment_id ): array {
+		$status = (string) $woo_refund->get_meta( self::META_STATUS );
+		if ( '' !== $payment_id ) {
+			try {
+				$remote = $this->client->get_refund( $payment_id, $refund_id );
+				$status = (string) ( $remote['status'] ?? $status );
+				$woo_refund->update_meta_data( self::META_STATUS, $status );
+				$woo_refund->save();
+			} catch ( RuntimeException $e ) { /* keep the stored status */ }
+		}
+		return array( 'status' => 'already_refunded', 'refund_id' => $refund_id, 'mollie_status' => $status );
 	}
 
 	private function refund_items( array $response ): array { return $response['_embedded']['refunds'] ?? $response['items'] ?? $response; }

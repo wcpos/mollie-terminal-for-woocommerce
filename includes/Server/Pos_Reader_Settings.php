@@ -22,7 +22,8 @@ final class Pos_Reader_Settings {
 		$values = array(
 			'default_reader' => $settings->default_terminal_id(),
 			'allowed_readers' => array_values( array_filter( (array) $raw, static function ( $id ) { return is_string( $id ) && '' !== $id; } ) ),
-			'lock_to_default' => 'yes' === $settings->get( 'lock_terminal', 'no' ),
+			// Effective lock only: a lock with no default would leave the till with no reader.
+			'lock_to_default' => $settings->lock_terminal(),
 		);
 		$options['gateways'][ Settings::GATEWAY_ID ] = $overwrite ? array_replace( $gateway, $values ) : $gateway + $values;
 		update_option( self::SETTINGS_OPTION, $options );

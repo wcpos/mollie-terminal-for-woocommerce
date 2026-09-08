@@ -25,6 +25,7 @@ class MollieApiClient {
 	}
 	public function get_payment( string $payment_id, array $include = array() ): array { return $this->request( 'GET', '/payments/' . rawurlencode( $payment_id ) . $this->include_query( $include ) ); }
 	public function cancel_payment( string $payment_id ): array { return $this->request( 'DELETE', '/payments/' . rawurlencode( $payment_id ) ); }
+	public function get_refund( string $payment_id, string $refund_id ): array { return $this->request( 'GET', '/payments/' . rawurlencode( $payment_id ) . '/refunds/' . rawurlencode( $refund_id ) ); }
 	public function list_refunds( string $payment_id ): array { return $this->request( 'GET', '/payments/' . rawurlencode( $payment_id ) . '/refunds' ); }
 	public function create_refund( string $payment_id, array $payload ): array { return $this->request( 'POST', '/payments/' . rawurlencode( $payment_id ) . '/refunds', $payload ); }
 

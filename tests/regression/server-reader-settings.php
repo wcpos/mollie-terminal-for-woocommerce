@@ -41,7 +41,7 @@ Readers::mirror( new Settings( array( 'default_terminal_id' => 'term_C', 'enable
 expect( array( 'default_reader' => 'term_C', 'enabled' => true, 'allowed_readers' => array( 'term_D' ), 'lock_to_default' => false ) === $options[$option]['gateways'][$gateway], 'save overwrites all reader fields only' );
 expect( array( 'enabled' => true ) === $options[$option]['gateways']['cash'] && 'preserved' === $options[$option]['other'], 'other settings preserved' );
 Readers::mirror( new Settings( array( 'default_terminal_id' => '', 'enabled_terminals' => '', 'lock_terminal' => 'yes' ) ) );
-expect( array() === $options[$option]['gateways'][$gateway]['allowed_readers'] && true === $options[$option]['gateways'][$gateway]['lock_to_default'], 'empty raw multiselect becomes array, lock copies raw yes' );
+expect( array() === $options[$option]['gateways'][$gateway]['allowed_readers'] && false === $options[$option]['gateways'][$gateway]['lock_to_default'], 'empty raw multiselect becomes array, lock needs a default' );
 require_once __DIR__ . '/../../includes/Server/Registration.php';
 require_once __DIR__ . '/../../includes/Server/Mollie_Server_Provider.php';
 require_once __DIR__ . '/../../includes/Gateway.php';
