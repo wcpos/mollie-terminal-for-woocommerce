@@ -37,6 +37,11 @@ function sanitize_key( $key ) { return strtolower( preg_replace( '/[^A-Za-z0-9_\
 // touching Mollie, which is all we need to prove they were not refused.
 class FakeOrderForGatewayDisabled {
 	public function get_id() { return 123; }
+	public $payment_method = '';
+	public $payment_method_title = '';
+	public function get_payment_method() { return $this->payment_method; }
+	public function set_payment_method( $m ) { $this->payment_method = (string) $m; }
+	public function set_payment_method_title( $t ) { $this->payment_method_title = (string) $t; }
 	public function is_paid() { return false; }
 	public function get_meta( $key ) { return null; }
 }

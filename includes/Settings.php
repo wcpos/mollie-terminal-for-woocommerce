@@ -60,6 +60,13 @@ class Settings {
 	/** Whether the gateway is switched on anywhere: online store or WooCommerce POS. */
 	public function active(): bool { return $this->enabled() || $this->enabled_for_pos(); }
 	public function api_key_source(): string { return 'mollie' === $this->get( 'api_key_source', 'own' ) ? 'mollie' : 'own'; }
+
+	/** Gateway title as configured in WooCommerce → Payments; the customer-facing "Payment via" label. */
+	public function title(): string {
+		$title = trim( (string) $this->get( 'title', '' ) );
+		if ( '' !== $title ) { return $title; }
+		return function_exists( '__' ) ? __( 'Mollie Terminal', 'mollie-terminal-for-woocommerce' ) : 'Mollie Terminal';
+	}
 	public function profile_id(): string { return (string) $this->get( 'profile_id', '' ); }
 	public function mode(): string { return 'live' === $this->get( 'mode', 'test' ) ? 'live' : 'test'; }
 	public function default_terminal_id(): string { return (string) $this->get( 'default_terminal_id', '' ); }

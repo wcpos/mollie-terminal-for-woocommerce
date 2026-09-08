@@ -24,6 +24,26 @@ class PaymentAttempt {
 		);
 	}
 
+	/**
+	 * Make this gateway the order's payment method.
+	 *
+	 * A Mollie payment is created and completed over AJAX or the webhook, never
+	 * through the WooCommerce pay form that normally stamps the chosen gateway
+	 * onto the order. Without this the order keeps whatever method it had (none,
+	 * or the POS default such as cash) and everything keyed on the order's
+	 * payment method reads the wrong gateway: the WooCommerce POS per-gateway
+	 * order status, refund routing, and the "Payment via" label.
+	 *
+	 * Called only once Mollie confirms the payment, never when an attempt starts:
+	 * an abandoned attempt must not leave Mollie on an order that is then paid
+	 * another way. Does not save; the caller saves the order right after.
+	 */
+	public static function claim_order_gateway( $order, string $title ): void {
+		if ( Settings::GATEWAY_ID === (string) $order->get_payment_method() && '' !== (string) $order->get_payment_method_title() ) { return; }
+		$order->set_payment_method( Settings::GATEWAY_ID );
+		$order->set_payment_method_title( $title );
+	}
+
 	public static function record_new( $order, array $payment, string $terminal_id, string $mode, string $method = 'pointofsale' ): array {
 		$attempt = array(
 			'attempt_id' => function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'attempt_', true ),

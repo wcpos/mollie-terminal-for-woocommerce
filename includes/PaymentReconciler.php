@@ -81,6 +81,10 @@ class PaymentReconciler {
 			$order->save();
 			return array( 'status' => 'conflict' );
 		}
+		// The pay form never runs for a Mollie payment, so nothing else stamps the
+		// gateway on the order; do it here so payment_complete() resolves the
+		// WooCommerce POS order status for this gateway, not an empty/default one.
+		PaymentAttempt::claim_order_gateway( $order, $this->settings->title() );
 		$order->set_transaction_id( $payment_id );
 		$order->payment_complete( $payment_id );
 		$order->add_order_note( sprintf( 'Mollie Terminal payment completed via %s.', $source ) );
