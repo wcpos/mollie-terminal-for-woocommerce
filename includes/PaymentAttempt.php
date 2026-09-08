@@ -32,11 +32,14 @@ class PaymentAttempt {
 	 * onto the order. Without this the order keeps whatever method it had (none,
 	 * or the POS default such as cash) and everything keyed on the order's
 	 * payment method reads the wrong gateway: the WooCommerce POS per-gateway
-	 * order status, refund routing, and the "Payment via" label. Does not save;
-	 * every caller saves the order right after.
+	 * order status, refund routing, and the "Payment via" label.
+	 *
+	 * Called only once Mollie confirms the payment, never when an attempt starts:
+	 * an abandoned attempt must not leave Mollie on an order that is then paid
+	 * another way. Does not save; the caller saves the order right after.
 	 */
 	public static function claim_order_gateway( $order, string $title ): void {
-		if ( Settings::GATEWAY_ID === (string) $order->get_payment_method() ) { return; }
+		if ( Settings::GATEWAY_ID === (string) $order->get_payment_method() && '' !== (string) $order->get_payment_method_title() ) { return; }
 		$order->set_payment_method( Settings::GATEWAY_ID );
 		$order->set_payment_method_title( $title );
 	}

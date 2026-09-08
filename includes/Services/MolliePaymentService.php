@@ -80,9 +80,6 @@ class MolliePaymentService {
 			$payload = $build_payload();
 			Logger::log( 'Creating Mollie payment.', array( 'order_id' => (int) $order->get_id(), 'terminal_id' => $terminal_id, 'method' => $method, 'amount' => $payload['amount']['value'] ?? '', 'currency' => $order->get_currency() ), 'info' );
 			$payment = $this->client->create_payment( $payload, $include );
-			// Stamp the gateway on the order before anything can complete the
-			// payment; record_new() saves. See PaymentAttempt::claim_order_gateway().
-			PaymentAttempt::claim_order_gateway( $order, $this->settings->title() );
 			PaymentAttempt::record_new( $order, $payment, $terminal_id, $this->settings->mode(), $method );
 			Logger::log( 'Mollie terminal payment created.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => PaymentAttempt::payment_id( $payment ), 'status' => PaymentAttempt::payment_status( $payment ), 'terminal_id' => $terminal_id ), 'success' );
 			return $this->with_qr_code( array( 'status' => 'created', 'payment' => $payment, 'method' => $method, 'channel' => PaymentAttempt::is_qr_method( $method ) ? 'qr' : 'terminal' ), $payment );

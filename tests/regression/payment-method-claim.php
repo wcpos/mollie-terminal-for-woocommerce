@@ -6,6 +6,8 @@
 // WooCommerce routes refunds) from $order->get_payment_method(). Before 0.5.5
 // a POS order paid by Mollie kept an empty or default (cash) method and always
 // landed on the default status, "Completed", whatever the merchant configured.
+// The gateway is claimed only once Mollie confirms the payment: an abandoned
+// attempt must not leave Mollie on an order that is then paid another way.
 function expect( $condition, $message = 'expectation failed' ) { if ( ! $condition ) { fwrite( STDERR, $message . "\n" ); exit( 1 ); } }
 
 $transients = array();
@@ -86,25 +88,24 @@ function paid_payment(): array {
 	return array( 'id' => 'tr_claim', 'status' => 'paid', 'method' => 'pointofsale', 'mode' => 'live', 'amount' => array( 'value' => '12.34', 'currency' => 'EUR' ), 'metadata' => array( 'order_id' => '321' ) );
 }
 
-// --- Starting a payment stamps the gateway on the order --------------------
-
 $settings = new Settings( array( 'mode' => 'live', 'default_terminal_id' => 'term_default' ) );
 $service  = new MolliePaymentService( new ClaimMollieClient(), $settings, new ClaimTerminalService() );
 
+// --- Starting a payment leaves the order's gateway alone -------------------
+// A cashier may abandon the terminal attempt and take cash instead; the order
+// must not be attributed to Mollie until Mollie confirms a payment.
+
 $order = new FakeOrderForClaim( 'pos_cash' ); // the POS default gateway, as a fresh POS order carries it
 $service->start_payment_for_order( $order, 'term_1' );
-expect( Settings::GATEWAY_ID === $order->get_payment_method(), 'starting a terminal payment should make Mollie the order payment method' );
-expect( 'Mollie Terminal' === $order->get_payment_method_title(), 'the default title should be used when none is configured' );
-expect( $order->saves >= 1, 'the order should be saved after claiming the gateway' );
+expect( 'pos_cash' === $order->get_payment_method(), 'starting a terminal payment must not change the order payment method' );
 
 $order = new FakeOrderForClaim( '' );
-( new MolliePaymentService( new ClaimMollieClient(), new Settings( array( 'mode' => 'live', 'qr_methods' => array( 'ideal' ), 'title' => 'Pin / QR' ) ), new ClaimTerminalService() ) )->start_qr_payment_for_order( $order, 'ideal' );
-expect( Settings::GATEWAY_ID === $order->get_payment_method(), 'starting a QR payment should make Mollie the order payment method' );
-expect( 'Pin / QR' === $order->get_payment_method_title(), 'the configured gateway title should be used' );
+( new MolliePaymentService( new ClaimMollieClient(), new Settings( array( 'mode' => 'live', 'qr_methods' => array( 'ideal' ) ) ), new ClaimTerminalService() ) )->start_qr_payment_for_order( $order, 'ideal' );
+expect( '' === $order->get_payment_method(), 'starting a QR payment must not change the order payment method' );
 
 // --- Completing a payment stamps the gateway before payment_complete() -----
-// Covers attempts started before 0.5.5 and the webhook/sweeper paths, where
-// the WooCommerce POS status filter runs inside payment_complete().
+// The webhook, poll and sweeper paths all end here, where the WooCommerce POS
+// status filter runs inside payment_complete().
 
 foreach ( array( '' => 'an empty', 'pos_cash' => 'the POS default' ) as $method_before => $label ) {
 	$order = new FakeOrderForClaim( $method_before );
@@ -115,10 +116,19 @@ foreach ( array( '' => 'an empty', 'pos_cash' => 'the POS default' ) as $method_
 	expect( 'Mollie Terminal' === $order->get_payment_method_title(), 'completion should set the gateway title' );
 }
 
-// A configured title is never overwritten once the order is ours.
+// The configured title is used once Mollie confirms the payment.
+$order = new FakeOrderForClaim( '' );
+PaymentAttempt::record_new( $order, array( 'id' => 'tr_claim', 'status' => 'open', 'amount' => array( 'value' => '12.34', 'currency' => 'EUR' ) ), 'term_1', 'live', 'pointofsale' );
+( new PaymentReconciler( new Settings( array( 'mode' => 'live', 'title' => 'Pin / QR' ) ) ) )->reconcile( $order, paid_payment(), 'poll' );
+expect( 'Pin / QR' === $order->get_payment_method_title(), 'the configured gateway title should be used' );
+
+// A custom title is never overwritten once the order is ours, but an empty one is filled.
 $order = new FakeOrderForClaim( Settings::GATEWAY_ID );
 $order->set_payment_method_title( 'Custom label' );
 PaymentAttempt::claim_order_gateway( $order, 'Mollie Terminal' );
 expect( 'Custom label' === $order->get_payment_method_title(), 'an order already on this gateway keeps its title' );
+$order = new FakeOrderForClaim( Settings::GATEWAY_ID );
+PaymentAttempt::claim_order_gateway( $order, 'Mollie Terminal' );
+expect( 'Mollie Terminal' === $order->get_payment_method_title(), 'an order already on this gateway with no title gets one' );
 
 echo "payment-method-claim ok\n";
