@@ -2,6 +2,10 @@
 
 All notable changes to Mollie Terminal for WooCommerce will be documented in this file.
 
+## Unreleased
+
+Mollie Terminal now supports the WooCommerce POS 1.11 checkout terminal tile through WooCommerce POS Pro 1.11.0 or newer. The Legacy tab is unchanged, reader settings are mirrored from the existing gateway fields, and tile payment creation sends an `Idempotency-Key` so retries within Mollie’s one-hour window reuse the same payment. Tips added on the terminal are recorded as an order fee in the new checkout. Without a supported Pro version, nothing changes: the legacy gateway remains available.
+
 ## 0.5.5 - 2026-09-08
 
 ### Fixed

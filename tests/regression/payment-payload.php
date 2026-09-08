@@ -51,7 +51,7 @@ class FakeOrderForPayload {
 class CapturingMollieClient extends MollieApiClient {
 	public $created_payload = array();
 	public function __construct() {}
-	public function create_payment( array $payload, array $include = array() ): array {
+	public function create_payment( array $payload, array $include = array(), string $idempotency_key = '' ): array {
 		$this->created_payload = $payload;
 		return array(
 			'id' => 'tr_payload_test',

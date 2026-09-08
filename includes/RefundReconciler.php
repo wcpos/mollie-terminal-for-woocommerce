@@ -13,12 +13,14 @@ class RefundReconciler {
 	private $client;
 	public function __construct( MollieApiClient $client ) { $this->client = $client; }
 
-	public function refund( $order, $woo_refund, string $amount, string $reason = '' ): array {
-		return PaymentLock::with_lock( (int) $order->get_id(), 'refund', function () use ( $order, $woo_refund, $amount, $reason ) {
+	public function refund( $order, $woo_refund, string $amount, string $reason = '', ?string $payment_id = null ): array {
+		return PaymentLock::with_lock( (int) $order->get_id(), 'refund', function () use ( $order, $woo_refund, $amount, $reason, $payment_id ) {
 			$existing = $woo_refund->get_meta( self::META_MOLLIE_REFUND_ID );
-			if ( $existing ) { return array( 'status' => 'already_refunded', 'refund_id' => $existing ); }
-			$payment_id = (string) $order->get_transaction_id();
-			if ( '' === $payment_id ) { $current = PaymentAttempt::current( $order ); $payment_id = $current['payment_id'] ?? ''; }
+			if ( $existing ) { return array( 'status' => 'already_refunded', 'refund_id' => $existing, 'mollie_status' => (string) $woo_refund->get_meta( self::META_STATUS ) ); }
+			if ( null === $payment_id ) {
+				$payment_id = (string) $order->get_transaction_id();
+				if ( '' === $payment_id ) { $current = PaymentAttempt::current( $order ); $payment_id = $current['payment_id'] ?? ''; }
+			}
 			if ( '' === $payment_id ) { throw new RuntimeException( 'No Mollie payment found for refund.' ); }
 			$payment = $this->client->get_payment( $payment_id );
 			$refunds = $this->refund_items( $this->client->list_refunds( $payment_id ) );
@@ -49,6 +51,6 @@ class RefundReconciler {
 		$woo_refund->update_meta_data( self::META_STATUS, (string) ( $refund['status'] ?? 'queued' ) );
 		$woo_refund->update_meta_data( self::META_AMOUNT, $amount );
 		$woo_refund->save();
-		return array( 'status' => 'refunded', 'refund_id' => (string) ( $refund['id'] ?? '' ) );
+		return array( 'status' => 'refunded', 'refund_id' => (string) ( $refund['id'] ?? '' ), 'mollie_status' => (string) ( $refund['status'] ?? 'queued' ) );
 	}
 }

@@ -4,7 +4,7 @@ Mollie Terminal support for WooCommerce and WooCommerce POS.
 
 This plugin starts Mollie `pointofsale` payments for in-person checkout and treats Mollie as the source of truth for payment and refund state. Local WooCommerce order meta is only a cache.
 
-## Safety model
+## Legacy safety model
 
 - Per-order locks prevent duplicate payment/refund mutations.
 - Every webhook, poll, cancel, retry, and refund path fetches authoritative Mollie state before changing an order.
@@ -42,7 +42,16 @@ This plugin starts Mollie `pointofsale` payments for in-person checkout and trea
 You do not need to enter a Mollie **Profile ID**: it is not required for
 `pointofsale` payments, and terminals are listed across the whole account.
 
-## Checkout flow
+## WooCommerce POS 1.11 checkout
+
+With WooCommerce POS Pro 1.11.0 or newer, enable Mollie Terminal under POS → Settings → Checkout to use its terminal tile.
+Cashiers send the selected payment amount to a reader from the tile; terminal tips are recorded as an order fee.
+Manage **Default terminal**, **Enabled terminals** and **Lock terminal selection** under WooCommerce → Settings → Payments → Mollie Terminal.
+These fields are mirrored into POS reader settings when saved; initial migration preserves existing POS reader choices.
+The **Legacy** tab is unchanged, and iDEAL/Bancontact QR payments remain there only.
+Without a supported Pro version, the plugin continues to use the legacy gateway only.
+
+## Legacy checkout flow
 
 At checkout the cashier optionally picks a terminal from the dropdown (defaults
 to the configured one) and clicks **Start Terminal Payment**. The plugin then:
@@ -76,7 +85,7 @@ Mollie test API key; Bancontact QR requires live mode. Bancontact caps QR
 payments at €1,500.00 per transaction (a scheme limit, not a plugin one); for
 larger totals use the terminal.
 
-## Stale payment cleanup
+## Legacy stale payment cleanup
 
 A Mollie `pointofsale` payment can stay "open" on the Mollie side if the flow
 is abandoned. The plugin actively cancels open payments when:

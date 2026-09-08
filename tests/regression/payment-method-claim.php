@@ -74,7 +74,7 @@ class FakeOrderForClaim {
 
 class ClaimMollieClient extends MollieApiClient {
 	public function __construct() {}
-	public function create_payment( array $payload, array $include = array() ): array {
+	public function create_payment( array $payload, array $include = array(), string $idempotency_key = '' ): array {
 		return array( 'id' => 'tr_claim', 'status' => 'open', 'amount' => $payload['amount'], 'method' => $payload['method'], 'mode' => 'live', 'metadata' => $payload['metadata'] );
 	}
 }
