@@ -2,6 +2,9 @@
 namespace WCPOS\WooCommercePOS\MollieTerminal;
 
 use WC_Payment_Gateway;
+use WCPOS\WooCommercePOS\MollieTerminal\Server\Mollie_Server_Provider;
+use WCPOS\WooCommercePOS\MollieTerminal\Server\Pos_Reader_Settings;
+use WCPOS\WooCommercePOS\MollieTerminal\Server\Registration;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieApiClient;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MolliePaymentService;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\TerminalService;
@@ -17,6 +20,7 @@ class Gateway extends WC_Payment_Gateway {
 		$this->title = $this->get_option( 'title', __( 'Mollie Terminal', 'mollie-terminal-for-woocommerce' ) );
 		$this->description = $this->get_option( 'description', __( 'Pay in person using Mollie Terminal.', 'mollie-terminal-for-woocommerce' ) );
 		add_action( 'woocommerce_update_options_payment_gateways_' . $this->id, array( $this, 'process_admin_options' ) );
+		add_action( 'woocommerce_update_options_payment_gateways_' . $this->id, array( $this, 'mirror_pos_reader_settings' ), 20 );
 		add_action( 'woocommerce_update_options_payment_gateways_' . $this->id, array( $this, 'clear_terminal_cache' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_scripts' ) );
 		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_payment_scripts' ) );
@@ -86,6 +90,11 @@ class Gateway extends WC_Payment_Gateway {
 			'desc_tip'    => true,
 			'default'     => 'no',
 		);
+		if ( Registration::pro_supported() ) {
+			foreach ( array( 'default_terminal_id', 'enabled_terminals', 'lock_terminal' ) as $field ) {
+				if ( isset( $this->form_fields[ $field ] ) ) { $this->form_fields[ $field ]['description'] .= ' ' . __( 'WooCommerce POS 1.11 reads this for the checkout terminal tile.', 'mollie-terminal-for-woocommerce' ); }
+			}
+		}
 	}
 
 	/**
@@ -190,6 +199,7 @@ class Gateway extends WC_Payment_Gateway {
 		$this->row( __( 'API key source', 'mollie-terminal-for-woocommerce' ), $key_source . ' — ' . $key_status );
 		$this->row( __( 'Selected default terminal', 'mollie-terminal-for-woocommerce' ), $settings->default_terminal_id() );
 		$this->row( __( 'Webhook URL (sent automatically on every payment)', 'mollie-terminal-for-woocommerce' ), $settings->webhook_url() );
+		$this->row( __( 'WooCommerce POS checkout', 'mollie-terminal-for-woocommerce' ), Registration::pro_supported() ? Mollie_Server_Provider::webhook_url() : sprintf( __( 'Requires WooCommerce POS Pro %s or newer (legacy checkout only)', 'mollie-terminal-for-woocommerce' ), Registration::REQUIRED_PRO_VERSION ) );
 		echo '<tr><th>' . esc_html__( 'Payment logs', 'mollie-terminal-for-woocommerce' ) . '</th><td>';
 		printf(
 			/* translators: %s: link to the WooCommerce status logs screen. */
@@ -341,6 +351,14 @@ class Gateway extends WC_Payment_Gateway {
 		echo '</div>';
 
 		echo '<noscript>' . esc_html__( 'Please enable JavaScript to use the Mollie Terminal integration.', 'mollie-terminal-for-woocommerce' ) . '</noscript>';
+	}
+
+	public function mirror_pos_reader_settings(): void {
+		if ( ! Registration::pro_supported() ) { return; }
+		Pos_Reader_Settings::mirror( new Settings() );
+		if ( class_exists( '\\WCPOS\\WooCommercePOSPro\\Payments\\Server\\Reader_Curation' ) ) {
+			\WCPOS\WooCommercePOSPro\Payments\Server\Reader_Curation::forget( Settings::GATEWAY_ID );
+		}
 	}
 
 	public function clear_terminal_cache(): void {

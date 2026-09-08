@@ -76,7 +76,7 @@ $newer = new FakeRefund( 11, '10.000' );
 $order = new FakeOrderForRefund( array( $newer, $older ) );
 $client = new FakeRefundClient();
 $result = ( new RefundHandler( $client ) )->process_refund( $order, 10, 'Returned item' );
-expect( array( 'status' => 'refunded', 'refund_id' => 're_new' ) === $result, 'the existing refund should be reconciled' );
+expect( array( 'status' => 'refunded', 'refund_id' => 're_new', 'mollie_status' => 'queued' ) === $result, 'the existing refund should be reconciled' );
 expect( 're_new' === $newer->get_meta( RefundReconciler::META_MOLLIE_REFUND_ID ) && $newer->saved, 'the newer refund must store the Mollie refund id' );
 expect( $original_older == $older, 'the older refund must remain untouched' );
 expect( 3 === $client->calls && '11' === $client->payload['metadata']['woo_refund_id'], 'Mollie must receive the newer WooCommerce refund id' );

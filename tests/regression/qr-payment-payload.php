@@ -51,7 +51,7 @@ class CapturingQrMollieClient extends MollieApiClient {
 	public $payload = array();
 	public $include = array();
 	public function __construct() {}
-	public function create_payment( array $payload, array $include = array() ): array {
+	public function create_payment( array $payload, array $include = array(), string $idempotency_key = '' ): array {
 		$this->payload = $payload;
 		$this->include = $include;
 		return array(

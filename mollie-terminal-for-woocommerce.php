@@ -45,11 +45,11 @@ spl_autoload_register(
 );
 
 function mtfwc_activate(): void {
-	if ( PHP_VERSION_ID >= MTFWC_MINIMUM_PHP_VERSION_ID ) {
-		return;
+	if ( PHP_VERSION_ID < MTFWC_MINIMUM_PHP_VERSION_ID ) {
+		deactivate_plugins( plugin_basename( __FILE__ ) );
+		wp_die( esc_html( sprintf( __( 'Mollie Terminal for WooCommerce requires PHP %1$s or newer. Your server is running PHP %2$s.', 'mollie-terminal-for-woocommerce' ), MTFWC_MINIMUM_PHP_VERSION, PHP_VERSION ) ) );
 	}
-	deactivate_plugins( plugin_basename( __FILE__ ) );
-	wp_die( esc_html( sprintf( __( 'Mollie Terminal for WooCommerce requires PHP %1$s or newer. Your server is running PHP %2$s.', 'mollie-terminal-for-woocommerce' ), MTFWC_MINIMUM_PHP_VERSION, PHP_VERSION ) ) );
+	Server\Registration::activation_check( __FILE__ );
 }
 register_activation_hook( __FILE__, __NAMESPACE__ . '\\mtfwc_activate' );
 
@@ -72,3 +72,4 @@ function init(): void {
 	new PaymentSweeper();
 }
 add_action( 'plugins_loaded', __NAMESPACE__ . '\\init', 11 );
+add_action( 'plugins_loaded', array( Server\Registration::class, 'register' ), 30 );
