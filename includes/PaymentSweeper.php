@@ -89,13 +89,18 @@ class PaymentSweeper {
 	private function find_orders( $status, string $meta_key, int $limit ): array {
 		$orders = wc_get_orders(
 			array(
-				'limit'      => $limit,
-				'status'     => $status,
-				'orderby'    => 'date',
-				'order'      => 'ASC',
-				'meta_query' => array(
-					array( 'key' => $meta_key, 'compare' => 'EXISTS' ),
-				),
+				// Refunds are order objects too and come back by default. They never
+				// carry the attempt meta and lack the WC_Order methods the sweep calls.
+				'type'         => 'shop_order',
+				'limit'        => $limit,
+				'status'       => $status,
+				'orderby'      => 'date',
+				'order'        => 'ASC',
+				// Not 'meta_query': the legacy posts order store ignores that argument
+				// (a doing_it_wrong notice at most) and returns the oldest orders of
+				// any kind. The meta_key shortcut is honoured by both stores.
+				'meta_key'     => $meta_key,
+				'meta_compare' => 'EXISTS',
 			)
 		);
 		return is_array( $orders ) ? $orders : array();

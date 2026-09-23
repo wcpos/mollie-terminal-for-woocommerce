@@ -2,6 +2,12 @@
 
 All notable changes to Mollie Terminal for WooCommerce will be documented in this file.
 
+## 0.5.6 - 2026-09-23
+
+### Fixed
+
+- **A critical error every ten minutes from the stale-payment cleanup on stores using classic order storage.** The cleanup cron asked WooCommerce for the orders that carry a Mollie payment attempt, but stores that keep orders in the posts table ignore that filter (WooCommerce only logs a debug notice). The cron therefore loaded the store's oldest orders of any status, refunds included, and crashed on the first refund it treated as an order ("Call to undefined method OrderRefund::is_paid()"). The same dropped filter meant abandoned terminal payments were only ever chased on the store's very oldest orders. The query now uses a filter both storage modes honour and asks for orders only, so the cron scans exactly the orders with a Mollie attempt and refunds never reach it. Stores on High-Performance Order Storage were not affected.
+
 ## 0.5.5 - 2026-09-08
 
 ### Fixed

@@ -11,6 +11,8 @@ function __( $text, $domain = null ) { return $text; }
 function wp_json_encode( $value ) { return json_encode( $value ); }
 class NoopWooLoggerForSweeper { public function log( $level, $message, $context = array() ) {} }
 function wc_get_logger() { return new NoopWooLoggerForSweeper(); }
+$captured_order_queries = array();
+function wc_get_orders( $args ) { global $captured_order_queries; $captured_order_queries[] = $args; return array(); }
 
 require_once __DIR__ . '/../../includes/Settings.php';
 require_once __DIR__ . '/../../includes/Logger.php';
@@ -119,5 +121,22 @@ $order->meta[ PaymentAttempt::META_ABANDONED_PAYMENT_IDS ] = array( 'tr_abandone
 $service->abandoned_result = array( 'tr_abandoned' => 'still_open' );
 expect( true === $sweeper->sweep_order( $order ), 'a still-open abandoned payment counts as swept' );
 expect( empty( $order->notes ), 'an unresolved abandoned payment must not spam order notes' );
+
+// The sweep must filter inside the order query. The legacy posts order store
+// ignores 'meta_query' (a doing_it_wrong notice at most), which made the cron
+// load the oldest orders of any kind, refunds included, and fatal on
+// WC_Order_Refund::is_paid().
+$captured_order_queries = array();
+$sweeper->sweep();
+expect( 2 === count( $captured_order_queries ), 'the sweep runs one order query per meta key' );
+foreach ( $captured_order_queries as $args ) {
+	expect( 'shop_order' === ( $args['type'] ?? '' ), 'the sweep must ask for orders only, never refunds' );
+	expect( ! array_key_exists( 'meta_query', $args ), 'meta_query is ignored by the posts store and must not be used' );
+	expect( 'EXISTS' === ( $args['meta_compare'] ?? '' ), 'the sweep must filter on the meta key existing' );
+}
+expect(
+	array( PaymentAttempt::META_CURRENT_PAYMENT_ID, PaymentAttempt::META_ABANDONED_PAYMENT_IDS ) === array_column( $captured_order_queries, 'meta_key' ),
+	'the sweep must query the current-attempt key and then the abandoned-payments key'
+);
 
 echo "payment-sweeper ok\n";
