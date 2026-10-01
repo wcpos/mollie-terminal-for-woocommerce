@@ -187,16 +187,23 @@ expect( 0 === $GLOBALS['mtfwc_payment_complete_calls'], 'a conflicting payment m
 expect( 0 === $GLOBALS['mtfwc_stock_reductions'], 'a conflicting payment must not reduce stock' );
 expect( 'tr_otherPayment' === $GLOBALS['mtfwc_order_rows'][38029]['transaction_id'], 'a conflicting payment must not overwrite the other transaction ID' );
 
-// Scenario 3: a concurrent completion must leave this request entirely idle.
+// Scenario 3: a concurrent completion reports verified payments paid without writing.
 reset_race_order();
 $key = 'mtfwc_lock_order_38029_complete_payment';
 $unchanged = $GLOBALS['mtfwc_order_rows'][38029];
 expect( PaymentLock::acquire( 38029, 'complete_payment', 120 ), 'another request claims completion' );
 $busy = $reconciler->reconcile( wc_get_order( 38029 ), $payment, 'poll' );
-expect( array( 'status' => 'pending', 'retry_allowed' => false ) === $busy, 'a busy completion must keep polling' );
+expect( array( 'status' => 'paid', 'completing' => true ) === $busy, 'a busy completion must report a verified payment as paid' );
 expect( 0 === $GLOBALS['mtfwc_payment_complete_calls'] && 0 === $GLOBALS['mtfwc_stock_reductions'], 'a busy completion must not complete or reduce stock' );
 expect( $unchanged === $GLOBALS['mtfwc_order_rows'][38029] && 0 === $GLOBALS['mtfwc_saves'], 'a busy completion must not touch or save the order' );
 expect( array() === $GLOBALS['mtfwc_cleaned_posts'], 'a busy completion must not reload the order' );
+$invalid_payment = $payment;
+$invalid_payment['amount']['value'] = '99.00';
+$invalid_busy = $reconciler->reconcile( wc_get_order( 38029 ), $invalid_payment, 'poll' );
+expect( array( 'status' => 'pending', 'retry_allowed' => false ) === $invalid_busy, 'a busy completion must not report an unverified payment as paid' );
+expect( 0 === $GLOBALS['mtfwc_payment_complete_calls'] && 0 === $GLOBALS['mtfwc_stock_reductions'], 'an unverified busy completion must not complete or reduce stock' );
+expect( $unchanged === $GLOBALS['mtfwc_order_rows'][38029] && 0 === $GLOBALS['mtfwc_saves'], 'an unverified busy completion must not touch or save the order' );
+expect( array() === $GLOBALS['mtfwc_cleaned_posts'], 'an unverified busy completion must not reload the order' );
 PaymentLock::release( 38029, 'complete_payment' );
 $retried = $reconciler->reconcile( wc_get_order( 38029 ), $payment, 'poll' );
 expect( 'paid' === $retried['status'] && 1 === $GLOBALS['mtfwc_payment_complete_calls'] && 1 === $GLOBALS['mtfwc_stock_reductions'], 'the next poll must complete exactly once' );

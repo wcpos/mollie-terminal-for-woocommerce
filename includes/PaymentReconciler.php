@@ -18,6 +18,11 @@ class PaymentReconciler {
 		$order_id = (int) $order->get_id();
 		if ( ! PaymentLock::acquire( $order_id, 'complete_payment', self::COMPLETE_LOCK_TTL ) ) {
 			Logger::log( 'Mollie Terminal payment completion already in progress for this order.', array( 'order_id' => $order_id, 'payment_id' => PaymentAttempt::payment_id( $payment ), 'source' => $source ), 'info' );
+			// Mollie reports paid and another request holds the claim and is
+			// completing the order, so tell the cashier it is paid if verified.
+			if ( $this->verify_payment( $order, $payment )['valid'] ) {
+				return array( 'status' => 'paid', 'completing' => true );
+			}
 			return array( 'status' => 'pending', 'retry_allowed' => false );
 		}
 		try {
