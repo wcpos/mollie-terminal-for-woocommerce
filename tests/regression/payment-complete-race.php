@@ -4,13 +4,19 @@
 // reconciles, so the second request still holds an unpaid in-memory copy
 // after the first has paid the database row. Completion must use fresh state.
 function expect( $condition, $message = 'expectation failed' ) { if ( ! $condition ) { fwrite( STDERR, $message . "\n" ); exit( 1 ); } }
+class NoopWooLoggerForRace { public function log( $level, $message, $context = array() ) {} }
+function wc_get_logger() { return new NoopWooLoggerForRace(); }
 
+require_once __DIR__ . '/support/fake-wpdb.php';
+require_once __DIR__ . '/../../includes/PaymentLock.php';
+require_once __DIR__ . '/../../includes/Logger.php';
 require_once __DIR__ . '/../../includes/Settings.php';
 require_once __DIR__ . '/../../includes/Utils/Money.php';
 require_once __DIR__ . '/../../includes/PaymentAttempt.php';
 require_once __DIR__ . '/../../includes/PaymentReconciler.php';
 
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentAttempt;
+use WCPOS\WooCommercePOS\MollieTerminal\PaymentLock;
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentReconciler;
 use WCPOS\WooCommercePOS\MollieTerminal\Settings;
 
@@ -67,6 +73,7 @@ class FakeRaceOrder {
 	public function add_order_note( $note ) { $GLOBALS['mtfwc_order_notes'][] = $note; }
 
 	public function save() {
+		$GLOBALS['mtfwc_saves']++;
 		// WC_Data persists changes, not the entire stale snapshot; notes are immediate.
 		foreach ( $this->changed_fields as $field => $changed ) {
 			$GLOBALS['mtfwc_order_rows'][ $this->get_id() ][ $field ] = $this->row[ $field ];
@@ -83,6 +90,11 @@ class FakeRaceOrder {
 	}
 
 	public function payment_complete( $transaction_id ) {
+		expect( isset( $GLOBALS['wpdb']->rows['mtfwc_lock_order_38029_complete_payment'] ), 'completion must hold the claim' );
+		if ( $GLOBALS['mtfwc_throw_completion'] ) {
+			$GLOBALS['mtfwc_throw_completion'] = false;
+			throw new RuntimeException( 'completion failed' );
+		}
 		if ( ! in_array( $this->row['status'], array( 'pending', 'failed', 'on-hold' ), true ) ) { return false; }
 		$this->row['status'] = 'processing';
 		$this->changed_fields['status'] = true;
@@ -97,9 +109,17 @@ class FakeRaceOrder {
 }
 
 function wc_get_order( $id ) {
-	return isset( $GLOBALS['mtfwc_order_rows'][ $id ] ) ? new FakeRaceOrder( $GLOBALS['mtfwc_order_rows'][ $id ] ) : false;
+	if ( $GLOBALS['mtfwc_missing_order'] || ! isset( $GLOBALS['mtfwc_order_rows'][ $id ] ) ) { return false; }
+	if ( isset( $GLOBALS['mtfwc_hpos_cache'][ $id ] ) ) { return clone $GLOBALS['mtfwc_hpos_cache'][ $id ]; }
+	if ( ! isset( $GLOBALS['mtfwc_post_cache'][ $id ] ) ) {
+		$GLOBALS['mtfwc_post_cache'][ $id ] = new FakeRaceOrder( $GLOBALS['mtfwc_order_rows'][ $id ] );
+	}
+	return clone $GLOBALS['mtfwc_post_cache'][ $id ];
 }
-function clean_post_cache( $id ) {}
+function clean_post_cache( $id ) {
+	unset( $GLOBALS['mtfwc_post_cache'][ $id ] );
+	$GLOBALS['mtfwc_cleaned_posts'][] = $id;
+}
 
 function reset_race_order() {
 	$GLOBALS['mtfwc_order_rows'] = array(
@@ -118,6 +138,12 @@ function reset_race_order() {
 	$GLOBALS['mtfwc_order_notes'] = array();
 	$GLOBALS['mtfwc_stock_reductions'] = 0;
 	$GLOBALS['mtfwc_payment_complete_calls'] = 0;
+	$GLOBALS['mtfwc_post_cache'] = array();
+	$GLOBALS['mtfwc_hpos_cache'] = array();
+	$GLOBALS['mtfwc_cleaned_posts'] = array();
+	$GLOBALS['mtfwc_saves'] = 0;
+	$GLOBALS['mtfwc_throw_completion'] = false;
+	$GLOBALS['mtfwc_missing_order'] = false;
 }
 
 $payment = array(
@@ -148,6 +174,7 @@ $completion_notes = array_filter( $GLOBALS['mtfwc_order_notes'], function ( $not
 	return false !== strpos( $note, 'Mollie Terminal payment completed via' );
 } );
 expect( 1 === count( $completion_notes ), 'webhook and poll must write exactly one payment completion note (wrote ' . count( $completion_notes ) . ')' );
+expect( array( 38029, 38029 ) === $GLOBALS['mtfwc_cleaned_posts'], 'both paid reconciliations must invalidate the post cache' );
 
 // Scenario 2: another transaction paid the order after this request loaded it.
 reset_race_order();
@@ -159,5 +186,78 @@ expect( 'conflict' === ( $conflict_result['status'] ?? '' ), 'a stale copy of an
 expect( 0 === $GLOBALS['mtfwc_payment_complete_calls'], 'a conflicting payment must not call payment_complete()' );
 expect( 0 === $GLOBALS['mtfwc_stock_reductions'], 'a conflicting payment must not reduce stock' );
 expect( 'tr_otherPayment' === $GLOBALS['mtfwc_order_rows'][38029]['transaction_id'], 'a conflicting payment must not overwrite the other transaction ID' );
+
+// Scenario 3: a concurrent completion must leave this request entirely idle.
+reset_race_order();
+$key = 'mtfwc_lock_order_38029_complete_payment';
+$unchanged = $GLOBALS['mtfwc_order_rows'][38029];
+expect( PaymentLock::acquire( 38029, 'complete_payment', 120 ), 'another request claims completion' );
+$busy = $reconciler->reconcile( wc_get_order( 38029 ), $payment, 'poll' );
+expect( array( 'status' => 'pending', 'retry_allowed' => false ) === $busy, 'a busy completion must keep polling' );
+expect( 0 === $GLOBALS['mtfwc_payment_complete_calls'] && 0 === $GLOBALS['mtfwc_stock_reductions'], 'a busy completion must not complete or reduce stock' );
+expect( $unchanged === $GLOBALS['mtfwc_order_rows'][38029] && 0 === $GLOBALS['mtfwc_saves'], 'a busy completion must not touch or save the order' );
+expect( array() === $GLOBALS['mtfwc_cleaned_posts'], 'a busy completion must not reload the order' );
+PaymentLock::release( 38029, 'complete_payment' );
+$retried = $reconciler->reconcile( wc_get_order( 38029 ), $payment, 'poll' );
+expect( 'paid' === $retried['status'] && 1 === $GLOBALS['mtfwc_payment_complete_calls'] && 1 === $GLOBALS['mtfwc_stock_reductions'], 'the next poll must complete exactly once' );
+expect( ! isset( $wpdb->rows[ $key ] ), 'successful completion must release the claim' );
+
+// Scenario 4: recover a claim left by a request that died.
+reset_race_order();
+$wpdb->rows[ $key ] = json_encode( array( 'token' => 'dead', 'expires_at' => time() - 60 ) );
+$recovered = $reconciler->reconcile( wc_get_order( 38029 ), $payment, 'sweep' );
+expect( 'paid' === $recovered['status'] && 1 === $GLOBALS['mtfwc_payment_complete_calls'] && 1 === $GLOBALS['mtfwc_stock_reductions'], 'an expired claim must allow one completion' );
+expect( ! isset( $wpdb->rows[ $key ] ), 'recovered completion must release the claim' );
+
+// Scenario 5: an exception must release the claim so the next request can finish.
+reset_race_order();
+$GLOBALS['mtfwc_throw_completion'] = true;
+try {
+	$reconciler->reconcile( wc_get_order( 38029 ), $payment, 'webhook' );
+	expect( false, 'completion exception must propagate' );
+} catch ( RuntimeException $e ) {
+	expect( 'completion failed' === $e->getMessage(), 'the original exception must propagate' );
+}
+expect( ! isset( $wpdb->rows[ $key ] ), 'a throwing completion must release the claim' );
+$retried = $reconciler->reconcile( wc_get_order( 38029 ), $payment, 'poll' );
+expect( 'paid' === $retried['status'] && 1 === $GLOBALS['mtfwc_payment_complete_calls'] && 1 === $GLOBALS['mtfwc_stock_reductions'], 'retry after an exception must complete once' );
+
+// Scenario 6: non-paid payments do not need the completion claim or reload.
+reset_race_order();
+expect( PaymentLock::acquire( 38029, 'complete_payment', 120 ), 'hold completion while checking an open payment' );
+$held = $wpdb->rows[ $key ];
+$open_payment = array_merge( $payment, array( 'status' => 'open' ) );
+$open = $reconciler->reconcile( wc_get_order( 38029 ), $open_payment, 'poll' );
+expect( 'open' === $open['status'], 'an open payment must stay open despite a held completion claim' );
+expect( $held === $wpdb->rows[ $key ] && array() === $GLOBALS['mtfwc_cleaned_posts'], 'an open payment must not claim or reload' );
+PaymentLock::release( 38029, 'complete_payment' );
+
+// A missing WooCommerce order uses the object supplied by a unit-test caller.
+reset_race_order();
+$copy = wc_get_order( 38029 );
+$GLOBALS['mtfwc_missing_order'] = true;
+$fallback = $reconciler->reconcile( $copy, $payment, 'poll' );
+expect( 'paid' === $fallback['status'] && $copy->is_paid(), 'a missing reload must use the given order' );
+
+// HPOS has a separate order cache which must also be invalidated.
+class FakeRaceOrderCache {
+	public function remove( $id ) { unset( $GLOBALS['mtfwc_hpos_cache'][ $id ] ); }
+}
+class_alias( FakeRaceOrderCache::class, 'Automattic\\WooCommerce\\Caches\\OrderCache' );
+function wc_get_container() {
+	return new class {
+		public function get( $class ) {
+			expect( 'Automattic\\WooCommerce\\Caches\\OrderCache' === $class, 'reload must request the HPOS order cache' );
+			return new FakeRaceOrderCache();
+		}
+	};
+}
+reset_race_order();
+$stale = wc_get_order( 38029 );
+$GLOBALS['mtfwc_hpos_cache'][38029] = clone $stale;
+$GLOBALS['mtfwc_order_rows'][38029]['status'] = 'processing';
+$GLOBALS['mtfwc_order_rows'][38029]['transaction_id'] = $payment['id'];
+$hpos = $reconciler->reconcile( $stale, $payment, 'poll' );
+expect( true === ( $hpos['idempotent'] ?? false ) && 0 === $GLOBALS['mtfwc_payment_complete_calls'], 'HPOS reload must see completion from another request' );
 
 echo "payment-complete-race ok\n";

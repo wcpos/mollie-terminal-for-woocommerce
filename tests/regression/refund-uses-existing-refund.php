@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/support/fake-wpdb.php';
 // The gateway must reuse WooCommerce's refund, never create a duplicate.
 function expect( $condition, $message = 'expectation failed' ) { if ( ! $condition ) { fwrite( STDERR, $message . "\n" ); exit( 1 ); } }
 function wc_create_refund( $args ) { expect( false, 'the gateway must not create another WooCommerce refund' ); }
@@ -11,12 +12,6 @@ class WP_Error {
 	public function get_error_code() { return $this->code; }
 }
 
-$transients = array();
-function sanitize_key( $key ) { return preg_replace( '/[^a-z0-9_\-]/', '', strtolower( $key ) ); }
-function wp_generate_uuid4() { return 'refund-attempt-uuid'; }
-function get_transient( $key ) { global $transients; return $transients[ $key ] ?? false; }
-function set_transient( $key, $value, $ttl ) { global $transients; $transients[ $key ] = $value; return true; }
-function delete_transient( $key ) { global $transients; unset( $transients[ $key ] ); }
 
 require_once __DIR__ . '/../../includes/Utils/Money.php';
 require_once __DIR__ . '/../../includes/PaymentLock.php';

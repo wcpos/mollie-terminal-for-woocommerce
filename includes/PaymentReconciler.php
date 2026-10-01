@@ -4,10 +4,42 @@ namespace WCPOS\WooCommercePOS\MollieTerminal;
 use WCPOS\WooCommercePOS\MollieTerminal\Utils\Money;
 
 class PaymentReconciler {
+	// Covers payment_complete() (status, stock, emails); a dead request's claim
+	// can be taken over after this interval.
+	private const COMPLETE_LOCK_TTL = 120;
+
 	private $settings;
 	public function __construct( ?Settings $settings = null ) { $this->settings = $settings ?: new Settings(); }
 
 	public function reconcile( $order, array $payment, string $source ): array {
+		if ( 'paid' !== ( $payment['status'] ?? 'unknown' ) ) {
+			return $this->apply_payment( $order, $payment, $source );
+		}
+		$order_id = (int) $order->get_id();
+		if ( ! PaymentLock::acquire( $order_id, 'complete_payment', self::COMPLETE_LOCK_TTL ) ) {
+			Logger::log( 'Mollie Terminal payment completion already in progress for this order.', array( 'order_id' => $order_id, 'payment_id' => PaymentAttempt::payment_id( $payment ), 'source' => $source ), 'info' );
+			return array( 'status' => 'pending', 'retry_allowed' => false );
+		}
+		try {
+			// The claim serializes completion across webhook, poll and sweep.
+			// Reload: this request may hold a copy from before another completed it (#21).
+			$fresh = self::reload_order( $order );
+			return $this->apply_payment( $fresh, $payment, $source );
+		} finally {
+			PaymentLock::release( $order_id, 'complete_payment' );
+		}
+	}
+
+	private static function reload_order( $order ) {
+		$id = $order->get_id();
+		if ( function_exists( 'clean_post_cache' ) ) { clean_post_cache( $id ); }
+		if ( function_exists( 'wc_get_container' ) && class_exists( \Automattic\WooCommerce\Caches\OrderCache::class ) ) {
+			wc_get_container()->get( \Automattic\WooCommerce\Caches\OrderCache::class )->remove( $id );
+		}
+		return function_exists( 'wc_get_order' ) ? ( wc_get_order( $id ) ?: $order ) : $order;
+	}
+
+	private function apply_payment( $order, array $payment, string $source ): array {
 		$verification = $this->verify_payment( $order, $payment );
 		$status = (string) ( $payment['status'] ?? 'unknown' );
 		PaymentAttempt::update_status( $order, $payment );
