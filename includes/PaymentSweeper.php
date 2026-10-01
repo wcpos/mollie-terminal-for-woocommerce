@@ -116,6 +116,11 @@ class PaymentSweeper {
 		// Abandoned payments first: resolving one can complete the order, in which
 		// case there is no stale current attempt left worth canceling.
 		$swept = $this->sweep_abandoned( $order );
+		// Resolving an abandoned payment can complete the order on a re-read copy (#21).
+		// Continue from the database's version so a stale copy is neither saved nor used to cancel a paid order's current attempt.
+		if ( $swept ) {
+			$order = PaymentReconciler::reload_order( $order );
+		}
 		if ( $order->is_paid() ) { return $swept; }
 		$current = PaymentAttempt::current( $order );
 		if ( ! $current || empty( $current['payment_id'] ) ) { return $swept; }
@@ -143,6 +148,7 @@ class PaymentSweeper {
 		Logger::log( 'Sweeping abandoned Mollie terminal payments.', array( 'order_id' => (int) $order->get_id(), 'payment_ids' => PaymentAttempt::abandoned( $order ) ), 'info' );
 		try {
 			$results = $this->service()->cancel_abandoned_payments( $order );
+			$order = PaymentReconciler::reload_order( $order );
 			foreach ( $results as $payment_id => $outcome ) {
 				if ( 'still_open' === $outcome ) { continue; }
 				$order->add_order_note( sprintf( 'Mollie Terminal: abandoned payment %s resolved by automatic cleanup (result: %s).', $payment_id, $outcome ) );

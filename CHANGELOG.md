@@ -2,6 +2,12 @@
 
 All notable changes to Mollie Terminal for WooCommerce will be documented in this file.
 
+## 0.5.7 - 2026-10-01
+
+### Fixed
+
+- **A Mollie payment could complete its order twice and reduce stock twice.** Mollie's webhook and the POS checkout's status poll both check the payment, and either one completes the order when the payment is paid. When both arrived within about a second of each other, each had already loaded the order while it was still unpaid, both went on to mark it paid, and WooCommerce reduced stock for the whole order a second time. Completing an order is now claimed once per order with a single atomic database insert. The request that wins the claim re-reads the order from the database before deciding, and completes it only if it is still unpaid. A request that arrives while another is completing the order leaves the order alone and reports the payment as paid, so the POS checkout moves on to the receipt and a cancel at that moment never reports a paid payment as canceled. The per-order lock that guards refunds, payment starts and cancellations used the same check-then-write pattern, so two requests could both get it; it now uses the same atomic claim.
+
 ## 0.5.6 - 2026-09-23
 
 ### Fixed
