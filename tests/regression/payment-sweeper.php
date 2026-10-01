@@ -13,6 +13,11 @@ class NoopWooLoggerForSweeper { public function log( $level, $message, $context 
 function wc_get_logger() { return new NoopWooLoggerForSweeper(); }
 $captured_order_queries = array();
 function wc_get_orders( $args ) { global $captured_order_queries; $captured_order_queries[] = $args; return array(); }
+function wc_get_order( $id ) {
+	$fresh = $GLOBALS['sweeper_fresh_order'] ?? null;
+	return $fresh && $fresh->get_id() === $id ? $fresh : false;
+}
+function clean_post_cache( $id ) {}
 
 require_once __DIR__ . '/../../includes/Settings.php';
 require_once __DIR__ . '/../../includes/Logger.php';
@@ -33,6 +38,7 @@ class FakeOrderForSweeper {
 	public $meta = array();
 	public $paid = false;
 	public $notes = array();
+	public $saves = 0;
 	public function is_paid() { return $this->paid; }
 	public function get_id() { return 4242; }
 	public $payment_method = '';
@@ -42,7 +48,7 @@ class FakeOrderForSweeper {
 	public function set_payment_method_title( $t ) { $this->payment_method_title = (string) $t; }
 	public function get_meta( $key ) { return $this->meta[ $key ] ?? null; }
 	public function add_order_note( $note ) { $this->notes[] = $note; }
-	public function save() {}
+	public function save() { $this->saves++; }
 }
 
 class CountingCancelService extends MolliePaymentService {
@@ -121,6 +127,22 @@ $order->meta[ PaymentAttempt::META_ABANDONED_PAYMENT_IDS ] = array( 'tr_abandone
 $service->abandoned_result = array( 'tr_abandoned' => 'still_open' );
 expect( true === $sweeper->sweep_order( $order ), 'a still-open abandoned payment counts as swept' );
 expect( empty( $order->notes ), 'an unresolved abandoned payment must not spam order notes' );
+
+// Issue #21 review: the reconciler completes a re-read copy, leaving the caller's copy stale.
+$stale = make_sweeper_order( 'open', 20 * MINUTE_IN_SECONDS );
+$stale->meta[ PaymentAttempt::META_ABANDONED_PAYMENT_IDS ] = array( 'tr_abandoned' );
+$fresh = make_sweeper_order( 'open', 20 * MINUTE_IN_SECONDS, true );
+$GLOBALS['sweeper_fresh_order'] = $fresh;
+$service = new CountingCancelService();
+$service->abandoned_result = array( 'tr_abandoned' => 'paid' );
+$sweeper = new PaymentSweeper( $service );
+expect( true === $sweeper->sweep_order( $stale ), 'an abandoned paid payment should count as swept' );
+expect( 0 === $service->cancel_calls, 'the re-read paid order must not have its current attempt canceled' );
+expect( 0 === $stale->saves, 'the stale order copy must never be saved' );
+expect( empty( $stale->notes ), 'the stale order copy must not receive notes' );
+expect( $fresh->saves >= 1, 'the re-read order should be saved' );
+expect( false !== strpos( implode( '\n', $fresh->notes ), 'tr_abandoned' ), 'the re-read order should receive the abandoned payment note' );
+unset( $GLOBALS['sweeper_fresh_order'] );
 
 // The sweep must filter inside the order query. The legacy posts order store
 // ignores 'meta_query' (a doing_it_wrong notice at most), which made the cron

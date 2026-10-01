@@ -35,7 +35,8 @@ class PaymentReconciler {
 		}
 	}
 
-	private static function reload_order( $order ) {
+	/** Callers that keep working on an order after reconcile() use this to reload it. */
+	public static function reload_order( $order ) {
 		$id = $order->get_id();
 		if ( function_exists( 'clean_post_cache' ) ) { clean_post_cache( $id ); }
 		if ( function_exists( 'wc_get_container' ) && class_exists( \Automattic\WooCommerce\Caches\OrderCache::class ) ) {
