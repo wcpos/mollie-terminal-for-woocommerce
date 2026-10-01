@@ -2,6 +2,12 @@
 
 All notable changes to Mollie Terminal for WooCommerce will be documented in this file.
 
+## 0.5.8 - 2026-10-01
+
+### Fixed
+
+- **On some stores 0.5.7 could still complete a Mollie order twice, or refuse a payment that had been paid.** 0.5.7 re-reads the order before completing it, but on stores using High-Performance Order Storage with its order data cache turned on, WooCommerce kept serving the copy of the order it had cached earlier in the same request. A request that had loaded the order while it was unpaid could therefore still complete it a second time and reduce stock again. The re-read also took the order's Mollie payment details from a cache, so when the cashier had started a new terminal payment after the request loaded the order, a paid payment was refused with the order note "payment verification failed: payment is not known for this order" and the order stayed unpaid until the next check. The re-read now clears both caches and reads the order and its payment details from the database.
+
 ## 0.5.7 - 2026-10-01
 
 ### Fixed
