@@ -72,6 +72,15 @@ class FakeRaceOrder {
 
 	public function add_order_note( $note ) { $GLOBALS['mtfwc_order_notes'][] = $note; }
 
+	// WC_Data::read_meta_data(): the 'orders' meta cache unless forced to read the database.
+	public function read_meta_data( $force_read = false ) {
+		if ( $force_read ) {
+			$this->row['meta'] = $GLOBALS['mtfwc_order_rows'][ $this->get_id() ]['meta'];
+			$GLOBALS['mtfwc_meta_cache'][ $this->get_id() ] = $this->row['meta'];
+			$this->changed_meta = array();
+		}
+	}
+
 	public function save() {
 		$GLOBALS['mtfwc_saves']++;
 		// WC_Data persists changes, not the entire stale snapshot; notes are immediate.
@@ -108,11 +117,19 @@ class FakeRaceOrder {
 	}
 }
 
+// Each request keeps the order it loaded until clean_post_cache() (posts store)
+// or OrderCache::remove() (HPOS) drops it. HPOS datastore caching keeps the
+// order row until clear_cached_data(), and order meta comes from the request's
+// 'orders' meta cache, which none of those clear, until read_meta_data(true).
+// Tests put a stale entry in those two caches to stand in for this request's.
 function wc_get_order( $id ) {
 	if ( $GLOBALS['mtfwc_missing_order'] || ! isset( $GLOBALS['mtfwc_order_rows'][ $id ] ) ) { return false; }
 	if ( isset( $GLOBALS['mtfwc_hpos_cache'][ $id ] ) ) { return clone $GLOBALS['mtfwc_hpos_cache'][ $id ]; }
+	$row = $GLOBALS['mtfwc_hpos_data_cache'][ $id ] ?? $GLOBALS['mtfwc_order_rows'][ $id ];
+	if ( isset( $GLOBALS['mtfwc_meta_cache'][ $id ] ) ) { $row['meta'] = $GLOBALS['mtfwc_meta_cache'][ $id ]; }
+	if ( isset( $GLOBALS['mtfwc_hpos_data_cache'][ $id ] ) ) { return new FakeRaceOrder( $row ); }
 	if ( ! isset( $GLOBALS['mtfwc_post_cache'][ $id ] ) ) {
-		$GLOBALS['mtfwc_post_cache'][ $id ] = new FakeRaceOrder( $GLOBALS['mtfwc_order_rows'][ $id ] );
+		$GLOBALS['mtfwc_post_cache'][ $id ] = new FakeRaceOrder( $row );
 	}
 	return clone $GLOBALS['mtfwc_post_cache'][ $id ];
 }
@@ -140,6 +157,8 @@ function reset_race_order() {
 	$GLOBALS['mtfwc_payment_complete_calls'] = 0;
 	$GLOBALS['mtfwc_post_cache'] = array();
 	$GLOBALS['mtfwc_hpos_cache'] = array();
+	$GLOBALS['mtfwc_hpos_data_cache'] = array();
+	$GLOBALS['mtfwc_meta_cache'] = array();
 	$GLOBALS['mtfwc_cleaned_posts'] = array();
 	$GLOBALS['mtfwc_saves'] = 0;
 	$GLOBALS['mtfwc_throw_completion'] = false;
@@ -251,9 +270,17 @@ class FakeRaceOrderCache {
 	public function remove( $id ) { unset( $GLOBALS['mtfwc_hpos_cache'][ $id ] ); }
 }
 class_alias( FakeRaceOrderCache::class, 'Automattic\\WooCommerce\\Caches\\OrderCache' );
+class FakeRaceOrdersTableDataStore {
+	public function clear_cached_data( array $order_ids ) {
+		foreach ( $order_ids as $id ) { unset( $GLOBALS['mtfwc_hpos_data_cache'][ $id ] ); }
+		return array_fill_keys( $order_ids, true );
+	}
+}
+class_alias( FakeRaceOrdersTableDataStore::class, 'Automattic\\WooCommerce\\Internal\\DataStores\\Orders\\OrdersTableDataStore' );
 function wc_get_container() {
 	return new class {
 		public function get( $class ) {
+			if ( 'Automattic\\WooCommerce\\Internal\\DataStores\\Orders\\OrdersTableDataStore' === $class ) { return new FakeRaceOrdersTableDataStore(); }
 			expect( 'Automattic\\WooCommerce\\Caches\\OrderCache' === $class, 'reload must request the HPOS order cache' );
 			return new FakeRaceOrderCache();
 		}
@@ -266,5 +293,43 @@ $GLOBALS['mtfwc_order_rows'][38029]['status'] = 'processing';
 $GLOBALS['mtfwc_order_rows'][38029]['transaction_id'] = $payment['id'];
 $hpos = $reconciler->reconcile( $stale, $payment, 'poll' );
 expect( true === ( $hpos['idempotent'] ?? false ) && 0 === $GLOBALS['mtfwc_payment_complete_calls'], 'HPOS reload must see completion from another request' );
+
+// #23: with HPOS datastore caching on, the order row is cached apart from OrderCache.
+reset_race_order();
+$webhook_copy = wc_get_order( 38029 );
+$poll_copy = wc_get_order( 38029 );
+$unpaid_row = $GLOBALS['mtfwc_order_rows'][38029];
+$reconciler->reconcile( $webhook_copy, $payment, 'webhook' );
+// The poll's request cached the row while it was unpaid.
+$GLOBALS['mtfwc_hpos_data_cache'][38029] = $unpaid_row;
+$cached = $reconciler->reconcile( $poll_copy, $payment, 'poll' );
+expect( 1 === $GLOBALS['mtfwc_payment_complete_calls'] && 1 === $GLOBALS['mtfwc_stock_reductions'], 'the reload must clear the HPOS datastore cache (completed ' . $GLOBALS['mtfwc_payment_complete_calls'] . ' times)' );
+expect( true === ( $cached['idempotent'] ?? false ), 'the reload past the HPOS datastore cache must see the completion from the other request' );
+
+// #23: a stale HPOS datastore row must not complete an order another transaction paid.
+reset_race_order();
+$stale = wc_get_order( 38029 );
+$GLOBALS['mtfwc_hpos_data_cache'][38029] = $GLOBALS['mtfwc_order_rows'][38029];
+$GLOBALS['mtfwc_order_rows'][38029]['status'] = 'processing';
+$GLOBALS['mtfwc_order_rows'][38029]['transaction_id'] = 'tr_otherPayment';
+$conflict = $reconciler->reconcile( $stale, $payment, 'poll' );
+expect( 0 === $GLOBALS['mtfwc_payment_complete_calls'] && 0 === $GLOBALS['mtfwc_stock_reductions'], 'a stale HPOS datastore row must not complete an order paid by another transaction' );
+expect( 'conflict' === ( $conflict['status'] ?? '' ), 'a stale HPOS datastore row of an order paid by another transaction must report conflict' );
+expect( 'tr_otherPayment' === $GLOBALS['mtfwc_order_rows'][38029]['transaction_id'], 'a stale HPOS datastore row must not overwrite the other transaction ID' );
+
+// #23: the reload must read meta past the request's 'orders' meta cache. This
+// request loaded the order while tr_7urSttWjQiFgHYcNHfYXJ was current; another
+// request then started tr_newAttempt, which Mollie now reports paid.
+reset_race_order();
+$stale = wc_get_order( 38029 );
+$old_meta = $GLOBALS['mtfwc_order_rows'][38029]['meta'];
+$new_payment = array_merge( $payment, array( 'id' => 'tr_newAttempt', 'status' => 'open' ) );
+PaymentAttempt::record_new( wc_get_order( 38029 ), $new_payment, 'term_1', 'live' );
+$GLOBALS['mtfwc_meta_cache'][38029] = $old_meta;
+$GLOBALS['mtfwc_order_notes'] = array();
+$fresh_meta = $reconciler->reconcile( $stale, array_merge( $new_payment, array( 'status' => 'paid' ) ), 'poll' );
+expect( array() === array_values( array_filter( $GLOBALS['mtfwc_order_notes'], function ( $note ) { return false !== strpos( $note, 'verification failed' ); } ) ), 'the reload must read meta past the meta cache, so a payment another request recorded verifies (notes: ' . implode( ' | ', $GLOBALS['mtfwc_order_notes'] ) . ')' );
+expect( 'paid' === ( $fresh_meta['status'] ?? '' ) && 1 === $GLOBALS['mtfwc_payment_complete_calls'], 'a paid payment recorded by another request must complete the order once' );
+expect( 'tr_newAttempt' === $GLOBALS['mtfwc_order_rows'][38029]['transaction_id'], 'the order must carry the paid payment ID' );
 
 echo "payment-complete-race ok\n";
