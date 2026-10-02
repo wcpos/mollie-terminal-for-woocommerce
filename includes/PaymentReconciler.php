@@ -37,7 +37,8 @@ class PaymentReconciler {
 
 	/**
 	 * Callers that keep working on an order after reconcile() use this to reload it.
-	 * Clears the post cache, the HPOS order cache and the HPOS datastore cache, then force-reads meta.
+	 * Clears the post cache, the HPOS order cache, the HPOS datastore cache and the HPOS meta cache, then force-reads meta.
+	 * The meta cache is cleared directly because the datastore skips it when the row-cache delete fails (#25).
 	 */
 	public static function reload_order( $order ) {
 		$id = $order->get_id();
@@ -49,6 +50,12 @@ class PaymentReconciler {
 			$data_store = wc_get_container()->get( \Automattic\WooCommerce\Internal\DataStores\Orders\OrdersTableDataStore::class );
 			if ( method_exists( $data_store, 'clear_cached_data' ) ) {
 				$data_store->clear_cached_data( array( $id ) );
+			}
+		}
+		if ( function_exists( 'wc_get_container' ) && class_exists( \Automattic\WooCommerce\Internal\DataStores\Orders\OrdersTableDataStoreMeta::class ) ) {
+			$meta_store = wc_get_container()->get( \Automattic\WooCommerce\Internal\DataStores\Orders\OrdersTableDataStoreMeta::class );
+			if ( method_exists( $meta_store, 'clear_cached_data' ) ) {
+				$meta_store->clear_cached_data( array( $id ) );
 			}
 		}
 		$fresh = function_exists( 'wc_get_order' ) ? wc_get_order( $id ) : false;
