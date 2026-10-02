@@ -35,14 +35,27 @@ class PaymentReconciler {
 		}
 	}
 
-	/** Callers that keep working on an order after reconcile() use this to reload it. */
+	/**
+	 * Callers that keep working on an order after reconcile() use this to reload it.
+	 * Clears the post cache, the HPOS order cache and the HPOS datastore cache, then force-reads meta.
+	 */
 	public static function reload_order( $order ) {
 		$id = $order->get_id();
 		if ( function_exists( 'clean_post_cache' ) ) { clean_post_cache( $id ); }
 		if ( function_exists( 'wc_get_container' ) && class_exists( \Automattic\WooCommerce\Caches\OrderCache::class ) ) {
 			wc_get_container()->get( \Automattic\WooCommerce\Caches\OrderCache::class )->remove( $id );
 		}
-		return function_exists( 'wc_get_order' ) ? ( wc_get_order( $id ) ?: $order ) : $order;
+		if ( function_exists( 'wc_get_container' ) && class_exists( \Automattic\WooCommerce\Internal\DataStores\Orders\OrdersTableDataStore::class ) ) {
+			$data_store = wc_get_container()->get( \Automattic\WooCommerce\Internal\DataStores\Orders\OrdersTableDataStore::class );
+			if ( method_exists( $data_store, 'clear_cached_data' ) ) {
+				$data_store->clear_cached_data( array( $id ) );
+			}
+		}
+		$fresh = function_exists( 'wc_get_order' ) ? wc_get_order( $id ) : false;
+		if ( is_object( $fresh ) && method_exists( $fresh, 'read_meta_data' ) ) {
+			$fresh->read_meta_data( true );
+		}
+		return is_object( $fresh ) ? $fresh : $order;
 	}
 
 	private function apply_payment( $order, array $payment, string $source ): array {
