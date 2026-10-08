@@ -24,6 +24,10 @@ class PaymentSweeper {
 	// their meta and stay the oldest matches, so each query reads past them in
 	// batches, fetching at most this many orders per meta key per run.
 	private const MAX_EXAMINED_PER_QUERY = 200;
+	// Smallest scan batch, independent of the mtfwc_stale_payment_batch action
+	// budget: a site lowering that budget to cut work must not multiply queries
+	// (at most 200 / 25 = 8 per list per run).
+	private const MIN_SCAN_PAGE = 25;
 
 	private $service;
 
@@ -67,13 +71,14 @@ class PaymentSweeper {
 	public function sweep(): void {
 		if ( ! function_exists( 'wc_get_orders' ) ) { return; }
 		$limit = max( 1, (int) apply_filters( 'mtfwc_stale_payment_batch', 25 ) );
+		$page = max( self::MIN_SCAN_PAGE, $limit );
 		// Orders whose current attempt may have gone stale in the browser.
-		$current = $this->find_orders( array( 'pending', 'failed' ), PaymentAttempt::META_CURRENT_PAYMENT_ID, $limit );
+		$current = $this->find_orders( array( 'pending', 'failed' ), PaymentAttempt::META_CURRENT_PAYMENT_ID, $page );
 		// Orders holding a payment that was abandoned locally while still open at
 		// Mollie. Their current-attempt pointer is gone, so the query above cannot
 		// see them, and their status is irrelevant: the order may since have been
 		// paid in cash or cancelled while the payment stayed open.
-		$abandoned = $this->find_orders( 'any', PaymentAttempt::META_ABANDONED_PAYMENT_IDS, $limit );
+		$abandoned = $this->find_orders( 'any', PaymentAttempt::META_ABANDONED_PAYMENT_IDS, $page );
 		// Each list acts on (makes Mollie calls for) at most one batch per run, as
 		// when each query fetched a single batch, so neither list starves the other.
 		// An order on both lists that the first batch already swept is skipped by
@@ -98,17 +103,17 @@ class PaymentSweeper {
 	}
 
 	/**
-	 * Oldest matching orders keyed by ID, fetched in batches of $limit until
+	 * Oldest matching orders keyed by ID, fetched in batches of $page until
 	 * MAX_EXAMINED_PER_QUERY orders are fetched. All batches are read before any
 	 * order is swept, so orders leaving the set (completed, cancelled) cannot
 	 * shift a later batch past an unseen order.
 	 *
 	 * @param string|array $status
 	 */
-	private function find_orders( $status, string $meta_key, int $limit ): array {
+	private function find_orders( $status, string $meta_key, int $page ): array {
 		$found = array();
 		for ( $offset = 0; $offset < self::MAX_EXAMINED_PER_QUERY; $offset += $size ) {
-			$size = min( $limit, self::MAX_EXAMINED_PER_QUERY - $offset );
+			$size = min( $page, self::MAX_EXAMINED_PER_QUERY - $offset );
 			$batch = $this->find_orders_page( $status, $meta_key, $size, $offset );
 			foreach ( $batch as $order ) { $found[ (int) $order->get_id() ] = $order; }
 			if ( count( $batch ) < $size ) { break; }
