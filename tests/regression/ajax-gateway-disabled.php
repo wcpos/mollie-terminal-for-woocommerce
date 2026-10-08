@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/support/fake-wpdb.php';
 // The checkout AJAX actions must refuse to act when the merchant has switched
 // the gateway off in WooCommerce → Payments, even for an otherwise valid
 // order token (issue #12).
@@ -26,12 +27,6 @@ $log_calls = array();
 class CapturingWooLoggerForGatewayDisabled { public function log( $level, $message, $context = array() ) { global $log_calls; $log_calls[] = $message; } }
 function wc_get_logger() { return new CapturingWooLoggerForGatewayDisabled(); }
 
-// Transient stubs for PaymentLock (cancel takes the per-order lock).
-$transients = array();
-function get_transient( $key ) { global $transients; return $transients[ $key ] ?? false; }
-function set_transient( $key, $value, $ttl = 0 ) { global $transients; $transients[ $key ] = $value; return true; }
-function delete_transient( $key ) { global $transients; unset( $transients[ $key ] ); return true; }
-function sanitize_key( $key ) { return strtolower( preg_replace( '/[^A-Za-z0-9_\-]/', '', (string) $key ) ); }
 
 // An order with no payment attempt: poll and cancel answer "idle" without
 // touching Mollie, which is all we need to prove they were not refused.

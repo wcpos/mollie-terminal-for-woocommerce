@@ -1,12 +1,7 @@
 <?php
+require_once __DIR__ . '/support/fake-wpdb.php';
 function expect( $condition, $message = 'expectation failed' ) { if ( ! $condition ) { fwrite( STDERR, $message . "\n" ); exit( 1 ); } }
 
-$transients = array();
-function sanitize_key( $key ) { return preg_replace( '/[^a-z0-9_\-]/', '', strtolower( $key ) ); }
-function wp_generate_uuid4() { return 'attempt-uuid'; }
-function get_transient( $key ) { global $transients; return $transients[ $key ] ?? false; }
-function set_transient( $key, $value, $ttl ) { global $transients; $transients[ $key ] = $value; return true; }
-function delete_transient( $key ) { global $transients; unset( $transients[ $key ] ); }
 function __( $text, $domain = null ) { return $text; }
 function wp_json_encode( $value ) { return json_encode( $value ); }
 class NoopWooLoggerForQrPayload { public function log( $level, $message, $context = array() ) {} }
