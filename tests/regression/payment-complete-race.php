@@ -478,14 +478,23 @@ $claims = count( array_filter( $wpdb->log, function ( $entry ) use ( $list_lock 
 expect( array( $payment['id'] ) === $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] && 0 === $GLOBALS['mtfwc_saves'], 'a removal must not write the list while another request holds it' );
 expect( 5 === $claims && $waited >= 1.4, 'a removal claims once then once per wait before giving up (claims ' . $claims . ', waited ' . round( $waited, 2 ) . ' s)' );
 expect( false !== strpos( $wpdb->rows[ $list_lock ], 'other-request' ), 'the other request keeps its lock' );
-// Another request holds the list: an addition still parks the id, through the re-read.
+// Another request holds the list: abandoning does not write without the lock.
+// It returns false and leaves the current pointer, so the payment stays visible
+// to the sweep and the cashier is told to cancel again.
 reset_race_order();
 $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] = array( 'tr_otherC' );
 $wpdb->rows[ $list_lock ] = json_encode( array( 'token' => 'other-request', 'expires_at' => time() + 300 ) );
-PaymentAttempt::abandon_current( wc_get_order( 38029 ) );
-expect( array( 'tr_otherC', $payment['id'] ) === $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ], 'an addition must park the id even when the list lock is busy (stored: ' . json_encode( $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] ) . ')' );
-expect( false !== strpos( $wpdb->rows[ $list_lock ], 'other-request' ), 'an addition without the lock must not release the other request\'s lock' );
+$busy_order = wc_get_order( 38029 );
+$abandoned_ok = PaymentAttempt::abandon_current( $busy_order );
+expect( false === $abandoned_ok, 'abandoning must report failure when the list lock is busy' );
+expect( array( 'tr_otherC' ) === $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] && 0 === $GLOBALS['mtfwc_saves'], 'a busy list must not be written and nothing saved' );
+expect( $payment['id'] === (string) $busy_order->get_meta( PaymentAttempt::META_CURRENT_PAYMENT_ID ), 'the current pointer must stay when the payment could not be parked' );
+expect( false !== strpos( $wpdb->rows[ $list_lock ], 'other-request' ), 'a refused addition must not release the other request\'s lock' );
 unset( $wpdb->rows[ $list_lock ] );
+// Lock free again: the same abandon parks the id and clears the pointer.
+$abandoned_ok = PaymentAttempt::abandon_current( $busy_order );
+expect( true === $abandoned_ok && array( 'tr_otherC', $payment['id'] ) === $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ], 'a retry with the lock free parks the id' );
+expect( '' === (string) $busy_order->get_meta( PaymentAttempt::META_CURRENT_PAYMENT_ID ), 'a retry with the lock free clears the current pointer' );
 
 // Scenario 4: recover a claim left by a request that died.
 reset_race_order();

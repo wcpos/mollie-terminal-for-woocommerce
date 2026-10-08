@@ -71,7 +71,7 @@ class CountingCancelService extends MolliePaymentService {
 	public $abandoned_result = array( 'tr_abandoned' => 'canceled' );
 	public function __construct() {}
 	public $polled = array();
-	public function cancel_order_payment( $order ): array { $this->cancel_calls++; return array( 'status' => 'canceled' ); }
+	public function cancel_order_payment( $order, string $only_payment_id = '' ): array { $this->cancel_calls++; return array( 'status' => 'canceled' ); }
 	// Stands in for the real recovery (asks Mollie, completes under the claim),
 	// which payment-complete-race.php covers end to end.
 	public function poll_order( $order, string $source = 'poll' ): array {
