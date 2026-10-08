@@ -235,13 +235,16 @@ class Gateway extends WC_Payment_Gateway {
 
 		// Resume the poll loop on reload when an unfinished payment is still open
 		// for this order — otherwise a refresh mid-payment drops the cashier back
-		// to an idle panel while the payment lingers open on Mollie.
+		// to an idle panel while the payment lingers open on Mollie. An attempt
+		// stored as paid on an unpaid order (completion died after recording it)
+		// resumes too: the poll reconciles it and completes the order.
 		$resume = false;
 		$resume_channel = 'terminal';
 		$resume_method = '';
 		if ( $order && ! $order->is_paid() ) {
 			$current = PaymentAttempt::current( $order );
-			if ( $current && ! empty( $current['payment_id'] ) && PaymentAttempt::is_non_final( (string) ( $current['status'] ?? '' ) ) ) {
+			$status = (string) ( $current['status'] ?? '' );
+			if ( $current && ! empty( $current['payment_id'] ) && ( PaymentAttempt::is_non_final( $status ) || 'paid' === $status ) ) {
 				$resume = true;
 				$resume_method = (string) ( $current['method'] ?? '' );
 				$resume_channel = PaymentAttempt::is_qr_method( $resume_method ) ? 'qr' : 'terminal';
@@ -380,6 +383,7 @@ class Gateway extends WC_Payment_Gateway {
 					'confirmingQr' => __( 'Scanned — waiting for the bank to confirm…', 'mollie-terminal-for-woocommerce' ),
 					'qrUnavailable' => __( 'Mollie did not return a QR code. Try again or use the terminal.', 'mollie-terminal-for-woocommerce' ),
 					'completing' => __( 'Payment complete — finishing order…', 'mollie-terminal-for-woocommerce' ),
+					'finishing' => __( 'Payment received — finishing order…', 'mollie-terminal-for-woocommerce' ),
 					'selectTerminal' => __( 'Select a terminal first.', 'mollie-terminal-for-woocommerce' ),
 					'failed' => __( 'Payment failed. You can try again.', 'mollie-terminal-for-woocommerce' ),
 					'canceled' => __( 'Payment canceled.', 'mollie-terminal-for-woocommerce' ),

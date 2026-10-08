@@ -101,8 +101,20 @@ $html = render_fields();
 expect( false !== strpos( $html, 'data-resume="1"' ), 'an order with an open attempt should resume on load' );
 expect( false !== strpos( $html, 'data-mtfwc-mode="cancel"' ), 'a resuming panel should render the button in cancel mode' );
 
+// --- #28 review: an attempt stored as paid on an unpaid order (completion died
+// after recording it) must resume, so the poll reconciles and completes it. ---
+$GLOBALS['mtfwc_test_order']->meta[ PaymentAttempt::META_CURRENT_PAYMENT_STATUS ] = 'paid';
+$html = render_fields();
+expect( false !== strpos( $html, 'data-resume="1"' ), 'an unpaid order with an attempt stored as paid should resume on load' );
+expect( false !== strpos( $html, 'data-mtfwc-mode="cancel"' ), 'a panel resuming a paid attempt should render the button in cancel mode' );
+// A final unpaid attempt stays idle.
+$GLOBALS['mtfwc_test_order']->meta[ PaymentAttempt::META_CURRENT_PAYMENT_STATUS ] = 'canceled';
+$html = render_fields();
+expect( false !== strpos( $html, 'data-resume="0"' ), 'a canceled attempt should not resume' );
+
 // --- Paid order: no resume even with a lingering attempt pointer. ------------
 $GLOBALS['mtfwc_test_order']->paid = true;
+$GLOBALS['mtfwc_test_order']->meta[ PaymentAttempt::META_CURRENT_PAYMENT_STATUS ] = 'paid';
 $html = render_fields();
 expect( false !== strpos( $html, 'data-resume="0"' ), 'a paid order should never resume the poll loop' );
 

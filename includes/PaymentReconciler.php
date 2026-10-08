@@ -16,14 +16,9 @@ class PaymentReconciler {
 			return $this->apply_payment( $order, $payment, $source );
 		}
 		$order_id = (int) $order->get_id();
-		if ( ! PaymentLock::acquire( $order_id, 'complete_payment', self::COMPLETE_LOCK_TTL ) ) {
-			Logger::log( 'Mollie Terminal payment completion already in progress for this order.', array( 'order_id' => $order_id, 'payment_id' => PaymentAttempt::payment_id( $payment ), 'source' => $source ), 'info' );
-			// Mollie reports paid and another request holds the claim and is
-			// completing the order, so tell the cashier it is paid if verified.
-			if ( $this->verify_payment( $order, $payment )['valid'] ) {
-				return array( 'status' => 'paid', 'completing' => true );
-			}
-			return array( 'status' => 'pending', 'retry_allowed' => false );
+		$claim = PaymentLock::claim( $order_id, 'complete_payment', self::COMPLETE_LOCK_TTL );
+		if ( PaymentLock::ACQUIRED !== $claim ) {
+			return $this->unclaimed_paid_result( $order, $payment, $source, $claim );
 		}
 		try {
 			// The claim serializes completion across webhook, poll and sweep.
@@ -33,6 +28,31 @@ class PaymentReconciler {
 		} finally {
 			PaymentLock::release( $order_id, 'complete_payment' );
 		}
+	}
+
+	/**
+	 * Answer for a paid payment this request could not claim. Holding the claim
+	 * proves nothing: its holder may die before payment_complete(), and on a DB
+	 * error nobody holds it. Report paid only when the database shows the order
+	 * completed by this payment. Otherwise stay non-terminal ('completing' tells
+	 * the panel a cancel did not cancel) so the poll keeps polling and takes over
+	 * once an abandoned claim expires.
+	 */
+	private function unclaimed_paid_result( $order, array $payment, string $source, string $claim ): array {
+		$context = array( 'order_id' => (int) $order->get_id(), 'payment_id' => PaymentAttempt::payment_id( $payment ), 'source' => $source );
+		if ( PaymentLock::ERROR === $claim ) {
+			Logger::log( 'Mollie Terminal payment completion could not be claimed (database error); will retry.', $context, 'error' );
+		} else {
+			Logger::log( 'Mollie Terminal payment completion already in progress for this order.', $context, 'info' );
+			$order = self::reload_order( $order );
+			if ( $order->is_paid() && $order->get_transaction_id() === PaymentAttempt::payment_id( $payment ) ) {
+				return array( 'status' => 'paid', 'idempotent' => true );
+			}
+		}
+		if ( ! $this->verify_payment( $order, $payment )['valid'] ) {
+			return array( 'status' => 'pending', 'retry_allowed' => false );
+		}
+		return array( 'status' => 'pending', 'completing' => true, 'retry_allowed' => false );
 	}
 
 	/**
