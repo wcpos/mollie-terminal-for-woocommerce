@@ -464,18 +464,24 @@ expect( array( array( 'INSERT', $list_lock ), array( 'DELETE', $list_lock ) ) ==
 expect( array( true ) === $locked_saves, 'the list must be saved while the lock is held' );
 expect( ! isset( $wpdb->rows[ $list_lock ] ) && array( 'tr_keepB' ) === $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ], 'the lock is released and only A is removed' );
 // Another request holds the list: a removal gives up after the waits (~1.5 s) and saves nothing.
+// The held lock is planted fresh and long-lived for each busy check, so a paused
+// runner cannot let it expire mid-check; the schedule is asserted by counting
+// claim attempts in the log, not by the wall clock.
 reset_race_order();
 $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] = array( $payment['id'] );
-$wpdb->rows[ $list_lock ] = json_encode( array( 'token' => 'other-request', 'expires_at' => time() + 5 ) );
+$wpdb->rows[ $list_lock ] = json_encode( array( 'token' => 'other-request', 'expires_at' => time() + 300 ) );
+$wpdb->log = array();
 $started = microtime( true );
 PaymentAttempt::forget_abandoned( wc_get_order( 38029 ), $payment['id'] );
 $waited = microtime( true ) - $started;
+$claims = count( array_filter( $wpdb->log, function ( $entry ) use ( $list_lock ) { return array( 'INSERT', $list_lock ) === $entry; } ) );
 expect( array( $payment['id'] ) === $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] && 0 === $GLOBALS['mtfwc_saves'], 'a removal must not write the list while another request holds it' );
-expect( $waited >= 1.4 && $waited < 3.0, 'a removal waits out the retry schedule before giving up (waited ' . round( $waited, 2 ) . ' s)' );
+expect( 5 === $claims && $waited >= 1.4, 'a removal claims once then once per wait before giving up (claims ' . $claims . ', waited ' . round( $waited, 2 ) . ' s)' );
 expect( false !== strpos( $wpdb->rows[ $list_lock ], 'other-request' ), 'the other request keeps its lock' );
 // Another request holds the list: an addition still parks the id, through the re-read.
 reset_race_order();
 $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] = array( 'tr_otherC' );
+$wpdb->rows[ $list_lock ] = json_encode( array( 'token' => 'other-request', 'expires_at' => time() + 300 ) );
 PaymentAttempt::abandon_current( wc_get_order( 38029 ) );
 expect( array( 'tr_otherC', $payment['id'] ) === $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ], 'an addition must park the id even when the list lock is busy (stored: ' . json_encode( $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] ) . ')' );
 expect( false !== strpos( $wpdb->rows[ $list_lock ], 'other-request' ), 'an addition without the lock must not release the other request\'s lock' );
