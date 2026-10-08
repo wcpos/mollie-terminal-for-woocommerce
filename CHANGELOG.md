@@ -6,6 +6,30 @@ All notable changes to Mollie Terminal for WooCommerce will be documented in thi
 
 Mollie Terminal now supports the WooCommerce POS 1.11 checkout terminal tile through WooCommerce POS Pro 1.11.0 or newer. The Legacy tab is unchanged, reader settings are mirrored from the existing gateway fields, and tile payment creation sends an `Idempotency-Key` so retries within Mollie’s one-hour window reuse the same payment. Tips added on the terminal are recorded as an order fee in the new checkout. Without a supported Pro version, nothing changes: the legacy gateway remains available.
 
+## 0.5.9 - 2026-10-02
+
+### Fixed
+
+- **A paid Mollie payment could still be refused on stores with HPOS order data caching and a persistent object cache.** Before completing an order, the plugin re-reads it and asks WooCommerce to drop its cached copy. WooCommerce drops the cached order details only when it also manages to drop the cached order row; when the row entry had already expired from the cache, the old details stayed. If the cashier had started a new terminal payment after those details were cached, the paid payment was refused with the order note "payment verification failed: payment is not known for this order", and the order stayed unpaid until something else changed the order's details or the cache dropped the entry, which WooCommerce does not set to expire. The plugin now drops the cached order details itself. Stock was not affected: the order's paid status was always read fresh, so an order could not be completed twice.
+
+## 0.5.8 - 2026-10-01
+
+### Fixed
+
+- **On some stores 0.5.7 could still complete a Mollie order twice, or refuse a payment that had been paid.** 0.5.7 re-reads the order before completing it, but on stores using High-Performance Order Storage with its order data cache turned on, WooCommerce kept serving the copy of the order it had cached earlier in the same request. A request that had loaded the order while it was unpaid could therefore still complete it a second time and reduce stock again. The re-read also took the order's Mollie payment details from a cache, so when the cashier had started a new terminal payment after the request loaded the order, a paid payment was refused with the order note "payment verification failed: payment is not known for this order" and the order stayed unpaid until the next check. The re-read now clears both caches and reads the order and its payment details from the database.
+
+## 0.5.7 - 2026-10-01
+
+### Fixed
+
+- **A Mollie payment could complete its order twice and reduce stock twice.** Mollie's webhook and the POS checkout's status poll both check the payment, and either one completes the order when the payment is paid. When both arrived within about a second of each other, each had already loaded the order while it was still unpaid, both went on to mark it paid, and WooCommerce reduced stock for the whole order a second time. Completing an order is now claimed once per order with a single atomic database insert. The request that wins the claim re-reads the order from the database before deciding, and completes it only if it is still unpaid. A request that arrives while another is completing the order leaves the order alone and reports the payment as paid, so the POS checkout moves on to the receipt and a cancel at that moment never reports a paid payment as canceled. The per-order lock that guards refunds, payment starts and cancellations used the same check-then-write pattern, so two requests could both get it; it now uses the same atomic claim.
+
+## 0.5.6 - 2026-09-23
+
+### Fixed
+
+- **A critical error every ten minutes from the stale-payment cleanup on stores using classic order storage.** The cleanup cron asked WooCommerce for the orders that carry a Mollie payment attempt, but stores that keep orders in the posts table ignore that filter (WooCommerce only logs a debug notice). The cron therefore loaded the store's oldest orders of any status, refunds included, and crashed on the first refund it treated as an order ("Call to undefined method OrderRefund::is_paid()"). The same dropped filter meant abandoned terminal payments were only ever chased on the store's very oldest orders. The query now uses a filter both storage modes honour and asks for orders only, so the cron scans exactly the orders with a Mollie attempt and refunds never reach it. Stores on High-Performance Order Storage were not affected.
+
 ## 0.5.5 - 2026-09-08
 
 ### Fixed

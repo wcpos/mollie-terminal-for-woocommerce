@@ -106,6 +106,15 @@ class AjaxHandler {
 		return (string) $order->get_checkout_order_received_url();
 	}
 
+	public static function with_paid_redirect( array $result, $order ): array {
+		// The completed order may be a fresh copy, not $order; the panel needs
+		// the thank-you URL for every paid answer.
+		if ( $order->is_paid() || in_array( $result['status'] ?? '', array( 'paid', 'already_paid', 'conflict' ), true ) ) {
+			$result['redirect_url'] = self::order_return_url( $order );
+		}
+		return $result;
+	}
+
 	public function mtfwc_pair_terminal(): void {
 		if ( ! current_user_can( 'manage_woocommerce' ) || ! check_ajax_referer( 'mtfwc_admin_actions', 'nonce', false ) ) { wp_send_json_error( __( 'Security check failed', 'mollie-terminal-for-woocommerce' ), 403 ); }
 		try {
@@ -130,11 +139,11 @@ class AjaxHandler {
 				wp_send_json_error( __( 'Invalid order.', 'mollie-terminal-for-woocommerce' ), 404 );
 			}
 			$result = $callback( $order );
-			if ( is_array( $result ) && $order->is_paid() ) {
+			if ( is_array( $result ) ) {
 				// The order is already reconciled and paid, so re-submitting the
 				// order-pay form would hit WooCommerce's "already paid" guard.
 				// Hand the frontend the thank-you URL to navigate to directly.
-				$result['redirect_url'] = self::order_return_url( $order );
+				$result = self::with_paid_redirect( $result, $order );
 			}
 			Logger::log( 'Mollie Terminal AJAX request completed.', array( 'operation' => $operation, 'order_id' => $order_id, 'status' => is_array( $result ) ? ( $result['status'] ?? '' ) : '' ), 'success' );
 			wp_send_json_success( $result );

@@ -4,6 +4,8 @@ function expect( $condition, $message = 'expectation failed' ) { if ( ! $conditi
 require_once __DIR__ . '/../../includes/Settings.php';
 require_once __DIR__ . '/../../includes/Utils/Money.php';
 require_once __DIR__ . '/../../includes/PaymentAttempt.php';
+require_once __DIR__ . '/support/fake-wpdb.php';
+require_once __DIR__ . '/../../includes/PaymentLock.php';
 require_once __DIR__ . '/../../includes/PaymentReconciler.php';
 
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentAttempt;

@@ -4,10 +4,68 @@ namespace WCPOS\WooCommercePOS\MollieTerminal;
 use WCPOS\WooCommercePOS\MollieTerminal\Utils\Money;
 
 class PaymentReconciler {
+	// Covers payment_complete() (status, stock, emails); a dead request's claim
+	// can be taken over after this interval.
+	private const COMPLETE_LOCK_TTL = 120;
+
 	private $settings;
 	public function __construct( ?Settings $settings = null ) { $this->settings = $settings ?: new Settings(); }
 
 	public function reconcile( $order, array $payment, string $source ): array {
+		if ( 'paid' !== ( $payment['status'] ?? 'unknown' ) ) {
+			return $this->apply_payment( $order, $payment, $source );
+		}
+		$order_id = (int) $order->get_id();
+		if ( ! PaymentLock::acquire( $order_id, 'complete_payment', self::COMPLETE_LOCK_TTL ) ) {
+			Logger::log( 'Mollie Terminal payment completion already in progress for this order.', array( 'order_id' => $order_id, 'payment_id' => PaymentAttempt::payment_id( $payment ), 'source' => $source ), 'info' );
+			// Mollie reports paid and another request holds the claim and is
+			// completing the order, so tell the cashier it is paid if verified.
+			if ( $this->verify_payment( $order, $payment )['valid'] ) {
+				return array( 'status' => 'paid', 'completing' => true );
+			}
+			return array( 'status' => 'pending', 'retry_allowed' => false );
+		}
+		try {
+			// The claim serializes completion across webhook, poll and sweep.
+			// Reload: this request may hold a copy from before another completed it (#21).
+			$fresh = self::reload_order( $order );
+			return $this->apply_payment( $fresh, $payment, $source );
+		} finally {
+			PaymentLock::release( $order_id, 'complete_payment' );
+		}
+	}
+
+	/**
+	 * Callers that keep working on an order after reconcile() use this to reload it.
+	 * Clears the post cache, the HPOS order cache, the HPOS datastore cache and the HPOS meta cache, then force-reads meta.
+	 * The meta cache is cleared directly because the datastore skips it when the row-cache delete fails (#25).
+	 */
+	public static function reload_order( $order ) {
+		$id = $order->get_id();
+		if ( function_exists( 'clean_post_cache' ) ) { clean_post_cache( $id ); }
+		if ( function_exists( 'wc_get_container' ) && class_exists( \Automattic\WooCommerce\Caches\OrderCache::class ) ) {
+			wc_get_container()->get( \Automattic\WooCommerce\Caches\OrderCache::class )->remove( $id );
+		}
+		if ( function_exists( 'wc_get_container' ) && class_exists( \Automattic\WooCommerce\Internal\DataStores\Orders\OrdersTableDataStore::class ) ) {
+			$data_store = wc_get_container()->get( \Automattic\WooCommerce\Internal\DataStores\Orders\OrdersTableDataStore::class );
+			if ( method_exists( $data_store, 'clear_cached_data' ) ) {
+				$data_store->clear_cached_data( array( $id ) );
+			}
+		}
+		if ( function_exists( 'wc_get_container' ) && class_exists( \Automattic\WooCommerce\Internal\DataStores\Orders\OrdersTableDataStoreMeta::class ) ) {
+			$meta_store = wc_get_container()->get( \Automattic\WooCommerce\Internal\DataStores\Orders\OrdersTableDataStoreMeta::class );
+			if ( method_exists( $meta_store, 'clear_cached_data' ) ) {
+				$meta_store->clear_cached_data( array( $id ) );
+			}
+		}
+		$fresh = function_exists( 'wc_get_order' ) ? wc_get_order( $id ) : false;
+		if ( is_object( $fresh ) && method_exists( $fresh, 'read_meta_data' ) ) {
+			$fresh->read_meta_data( true );
+		}
+		return is_object( $fresh ) ? $fresh : $order;
+	}
+
+	private function apply_payment( $order, array $payment, string $source ): array {
 		$verification = $this->verify_payment( $order, $payment );
 		$status = (string) ( $payment['status'] ?? 'unknown' );
 		PaymentAttempt::update_status( $order, $payment );

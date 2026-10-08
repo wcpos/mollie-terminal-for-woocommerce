@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/support/fake-wpdb.php';
 function expect( $condition, $message = 'expectation failed' ) { if ( ! $condition ) { fwrite( STDERR, $message . "\n" ); exit( 1 ); } }
 require_once __DIR__ . '/stubs/wcpos-pro-server.php';
 function sanitize_key( $key ) { return $key; }
