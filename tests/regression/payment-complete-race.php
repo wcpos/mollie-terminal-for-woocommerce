@@ -211,27 +211,74 @@ expect( 0 === $GLOBALS['mtfwc_payment_complete_calls'], 'a conflicting payment m
 expect( 0 === $GLOBALS['mtfwc_stock_reductions'], 'a conflicting payment must not reduce stock' );
 expect( 'tr_otherPayment' === $GLOBALS['mtfwc_order_rows'][38029]['transaction_id'], 'a conflicting payment must not overwrite the other transaction ID' );
 
-// Scenario 3: a concurrent completion reports verified payments paid without writing.
+// Scenario 3: another request holds the claim. Holding it is no proof the order
+// gets completed: the holder can die before payment_complete(). The poll must stay
+// non-terminal until the database shows the order paid by this payment (#27).
 reset_race_order();
 $key = 'mtfwc_lock_order_38029_complete_payment';
 $unchanged = $GLOBALS['mtfwc_order_rows'][38029];
 expect( PaymentLock::acquire( 38029, 'complete_payment', 120 ), 'another request claims completion' );
 $busy = $reconciler->reconcile( wc_get_order( 38029 ), $payment, 'poll' );
-expect( array( 'status' => 'paid', 'completing' => true ) === $busy, 'a busy completion must report a verified payment as paid' );
+expect( array( 'status' => 'pending', 'completing' => true, 'retry_allowed' => false ) === $busy, 'a held claim on a still-unpaid order must keep the poll non-terminal (got ' . json_encode( $busy ) . ')' );
 expect( 0 === $GLOBALS['mtfwc_payment_complete_calls'] && 0 === $GLOBALS['mtfwc_stock_reductions'], 'a busy completion must not complete or reduce stock' );
 expect( $unchanged === $GLOBALS['mtfwc_order_rows'][38029] && 0 === $GLOBALS['mtfwc_saves'], 'a busy completion must not touch or save the order' );
-expect( array() === $GLOBALS['mtfwc_cleaned_posts'], 'a busy completion must not reload the order' );
+expect( array( 38029 ) === $GLOBALS['mtfwc_cleaned_posts'], 'a busy completion must re-read the order before answering' );
 $invalid_payment = $payment;
 $invalid_payment['amount']['value'] = '99.00';
 $invalid_busy = $reconciler->reconcile( wc_get_order( 38029 ), $invalid_payment, 'poll' );
 expect( array( 'status' => 'pending', 'retry_allowed' => false ) === $invalid_busy, 'a busy completion must not report an unverified payment as paid' );
 expect( 0 === $GLOBALS['mtfwc_payment_complete_calls'] && 0 === $GLOBALS['mtfwc_stock_reductions'], 'an unverified busy completion must not complete or reduce stock' );
 expect( $unchanged === $GLOBALS['mtfwc_order_rows'][38029] && 0 === $GLOBALS['mtfwc_saves'], 'an unverified busy completion must not touch or save the order' );
-expect( array() === $GLOBALS['mtfwc_cleaned_posts'], 'an unverified busy completion must not reload the order' );
 PaymentLock::release( 38029, 'complete_payment' );
 $retried = $reconciler->reconcile( wc_get_order( 38029 ), $payment, 'poll' );
 expect( 'paid' === $retried['status'] && 1 === $GLOBALS['mtfwc_payment_complete_calls'] && 1 === $GLOBALS['mtfwc_stock_reductions'], 'the next poll must complete exactly once' );
 expect( ! isset( $wpdb->rows[ $key ] ), 'successful completion must release the claim' );
+
+// Scenario 3b: the claim holder has completed the order; this request still holds
+// an unpaid copy. The re-read shows it paid by this payment, so report paid.
+reset_race_order();
+$stale = wc_get_order( 38029 );
+expect( PaymentLock::acquire( 38029, 'complete_payment', 120 ), 'the completing request holds the claim' );
+$GLOBALS['mtfwc_order_rows'][38029]['status'] = 'processing';
+$GLOBALS['mtfwc_order_rows'][38029]['transaction_id'] = $payment['id'];
+$done = $reconciler->reconcile( $stale, $payment, 'poll' );
+expect( 'paid' === ( $done['status'] ?? '' ), 'a held claim on an order already paid by this payment must report paid (got ' . json_encode( $done ) . ')' );
+expect( 0 === $GLOBALS['mtfwc_payment_complete_calls'] && 0 === $GLOBALS['mtfwc_saves'], 'reporting a completed order must not complete or save again' );
+// Paid by another transaction while the claim is held: not this payment's completion.
+$GLOBALS['mtfwc_order_rows'][38029]['transaction_id'] = 'tr_otherPayment';
+$other = $reconciler->reconcile( $stale, $payment, 'poll' );
+expect( 'paid' !== ( $other['status'] ?? '' ), 'a held claim must not report paid for an order paid by another transaction' );
+PaymentLock::release( 38029, 'complete_payment' );
+
+// Scenario 3c: the claim holder died before payment_complete(). Polls stay
+// non-terminal while its claim is live, and the first poll after it expires
+// takes over and completes the order once.
+reset_race_order();
+$wpdb->rows[ $key ] = json_encode( array( 'token' => 'dying', 'expires_at' => time() + 120 ) );
+$waiting = $reconciler->reconcile( wc_get_order( 38029 ), $payment, 'poll' );
+expect( 'paid' !== ( $waiting['status'] ?? '' ), 'a dead holder\'s live claim must not make the poll report paid' );
+expect( 0 === $GLOBALS['mtfwc_payment_complete_calls'], 'a dead holder\'s live claim must not complete the order' );
+$wpdb->rows[ $key ] = json_encode( array( 'token' => 'dying', 'expires_at' => time() - 1 ) );
+$taken_over = $reconciler->reconcile( wc_get_order( 38029 ), $payment, 'poll' );
+expect( 'paid' === $taken_over['status'] && 1 === $GLOBALS['mtfwc_payment_complete_calls'] && 1 === $GLOBALS['mtfwc_stock_reductions'], 'the poll must take over an expired claim and complete once' );
+
+// Scenario 3d: the claim insert fails (database error). Nobody holds the claim,
+// so a verified paid payment must not be reported paid; the next poll retries.
+reset_race_order();
+$wpdb->insert_error = true;
+expect( PaymentLock::ERROR === PaymentLock::claim( 38029, 'complete_payment', 120 ), 'a failed claim insert must report a database error, not a held claim' );
+$errored = $reconciler->reconcile( wc_get_order( 38029 ), $payment, 'poll' );
+expect( array( 'status' => 'pending', 'completing' => true, 'retry_allowed' => false ) === $errored, 'a database error on the claim must keep the poll non-terminal, never paid (got ' . json_encode( $errored ) . ')' );
+expect( 0 === $GLOBALS['mtfwc_payment_complete_calls'] && 0 === $GLOBALS['mtfwc_saves'], 'a database error on the claim must not complete or save the order' );
+try {
+	PaymentLock::with_lock( 38029, 'complete_payment', function () { expect( false, 'with_lock must not run its callback without the claim' ); } );
+	expect( false, 'with_lock must throw when the claim cannot be written' );
+} catch ( RuntimeException $e ) {
+	expect( false !== strpos( $e->getMessage(), 'already running' ), 'with_lock keeps its exception on a failed claim' );
+}
+$wpdb->insert_error = false;
+$recovered = $reconciler->reconcile( wc_get_order( 38029 ), $payment, 'poll' );
+expect( 'paid' === $recovered['status'] && 1 === $GLOBALS['mtfwc_payment_complete_calls'], 'the poll after the database recovers must complete once' );
 
 // Scenario 4: recover a claim left by a request that died.
 reset_race_order();

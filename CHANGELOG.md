@@ -2,6 +2,13 @@
 
 All notable changes to Mollie Terminal for WooCommerce will be documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- **A paid Mollie payment could leave its order unpaid until the ten-minute cleanup, while the POS checkout had already moved on to the receipt.** Since 0.5.7, when Mollie's webhook and the checkout's status poll both saw the payment paid, the one that did not get to complete the order told the checkout the payment was paid, and the checkout stopped checking. If the request completing the order then died before finishing, or the plugin could not record which request was completing it (a database error), nothing finished the order: the customer had been charged, but the order, stock and emails stayed incomplete until the stale-payment cleanup ran, and on stores without a working WP-Cron that might never happen. The checkout now reports the payment as paid only once the order is actually completed, shows "Payment received — finishing order…" meanwhile, and keeps checking, so it finishes the order itself if the other request does not within two minutes. Pressing Cancel or switching payment method at that moment no longer reports a paid payment as canceled.
+- **The stale-payment cleanup could mark a paid terminal payment as abandoned again.** When the cleanup resolved two set-aside payments on one order in the same run, one paid and one canceled, failed or expired, saving the second one wrote back the order's old payment history, so the paid payment was listed as abandoned and its history entry lost the paid status. The order itself was still completed correctly; the cleanup now reads the order afresh before each payment.
+
 ## 0.5.9 - 2026-10-02
 
 ### Fixed

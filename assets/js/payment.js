@@ -271,6 +271,18 @@
 		return '';
 	}
 
+	// Mollie reports the payment paid but the order is not completed yet (another
+	// request is completing it, or the completion claim failed). It is not
+	// canceled: keep polling until the server reports the order paid.
+	function resultCompleting(result) {
+		return !!(result && result.json && result.json.data && result.json.data.completing);
+	}
+
+	function resumeCompleting(root) {
+		startAutoPoll(root);
+		setStatus(root, t('finishing', 'Payment received — finishing order…'), 'info');
+	}
+
 	function resultQrCode(result) {
 		return result && result.json && result.json.data ? result.json.data.qr_code || null : null;
 	}
@@ -498,6 +510,10 @@
 					completeOrder(root, resultRedirect(result));
 					return;
 				}
+				if (resultCompleting(result)) {
+					resumeCompleting(root);
+					return;
+				}
 				setStatus(root, t('timedOut', 'Timed out waiting for the terminal. Check the terminal or try again.'), 'error');
 				resetToIdle(root);
 			});
@@ -530,7 +546,9 @@
 				showIdle(root);
 				resetToIdle(root);
 			} else {
-				if ('qr' !== selectedChannel(root)) {
+				if (resultCompleting(result)) {
+					setStatus(root, t('finishing', 'Payment received — finishing order…'), 'info');
+				} else if ('qr' !== selectedChannel(root)) {
 					setStatus(root, t('waiting', 'Waiting for terminal…'), 'info');
 				} else if ('open' !== status) {
 					setStatus(root, t('confirmingQr', 'Scanned — waiting for the bank to confirm…'), 'info');
@@ -680,6 +698,10 @@
 				completeOrder(root, resultRedirect(result));
 				return;
 			}
+			if (resultCompleting(result)) {
+				resumeCompleting(root);
+				return;
+			}
 			if ('abandoned' === status) {
 				// The terminal never responded and Mollie would not cancel; the
 				// server detached the attempt so a fresh Start works. Free the UI.
@@ -751,6 +773,10 @@
 			if ('paid' === classify(status)) {
 				// Paid after all — finish the order rather than claim it was canceled.
 				completeOrder(root, resultRedirect(result));
+				return;
+			}
+			if (resultCompleting(result)) {
+				resumeCompleting(root);
 				return;
 			}
 			if ('abandoned' === status) {

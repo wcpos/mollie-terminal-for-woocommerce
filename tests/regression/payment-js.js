@@ -313,6 +313,34 @@ async function flush() {
 	assert.strictEqual(cancelAction.disabled, false, 'the button is usable again after abandon');
 	assert(!cancelPanel.mtfwcPoll, 'the poll loop stops after abandon');
 
+	// #27: Mollie reports the payment paid but the order is not completed yet
+	// (another request holds the completion claim, or it could not be written).
+	// The server answers non-terminal with completing=true; a cancel must not say
+	// "canceled" and the panel must keep polling until the order is paid.
+	const statusText = () => cancelPanel.querySelector('.mtfwc-payment-status').textContent;
+	cancelAction.click();
+	await resolveNext({ status: 'created' });
+	cancelPanel.mtfwcPoll.deadline = 0; // the timeout auto-cancel meets a completing payment
+	await fireTimers();
+	assert.strictEqual(lastAction(), 'mtfwc_cancel_payment', 'the timed-out poll auto-cancels');
+	await resolveNext({ status: 'pending', completing: true, retry_allowed: false });
+	assert(cancelPanel.mtfwcPoll, 'a timeout cancel that meets a completing payment resumes polling');
+	assert(!/timed out|canceled/i.test(statusText()), 'a completing payment is not reported as timed out or canceled');
+	assert.strictEqual(cancelAction.getAttribute('data-mtfwc-mode'), 'cancel', 'the panel stays in the in-flight state');
+	cancelAction.click();
+	assert.strictEqual(lastAction(), 'mtfwc_cancel_payment', 'the cashier can still press cancel');
+	await resolveNext({ status: 'pending', completing: true, retry_allowed: false });
+	assert(cancelPanel.mtfwcPoll, 'a cancel that meets a completing payment resumes polling');
+	assert(!/canceled/i.test(statusText()), 'a completing payment is never reported as canceled');
+	assert(/finishing/i.test(statusText()), 'the panel says the order is being finished');
+	await fireTimers();
+	assert.strictEqual(lastAction(), 'mtfwc_poll_payment', 'the resumed loop polls');
+	await resolveNext({ status: 'pending', completing: true, retry_allowed: false });
+	assert(cancelPanel.mtfwcPoll && /finishing/i.test(statusText()), 'a completing poll keeps polling and keeps the finishing status');
+	await fireTimers();
+	await resolveNext({ status: 'paid', redirect_url: thankYouUrl });
+	assert.strictEqual(cancelPanel.mtfwcCompleted, true, 'the order completes once the server reports it paid');
+
 	// Switching payment method away from Mollie Terminal stops and cancels an
 	// in-flight payment so it does not linger open.
 	const methodPanel = makePanel('987');

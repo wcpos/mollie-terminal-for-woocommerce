@@ -380,6 +380,7 @@ class Gateway extends WC_Payment_Gateway {
 					'confirmingQr' => __( 'Scanned — waiting for the bank to confirm…', 'mollie-terminal-for-woocommerce' ),
 					'qrUnavailable' => __( 'Mollie did not return a QR code. Try again or use the terminal.', 'mollie-terminal-for-woocommerce' ),
 					'completing' => __( 'Payment complete — finishing order…', 'mollie-terminal-for-woocommerce' ),
+					'finishing' => __( 'Payment received — finishing order…', 'mollie-terminal-for-woocommerce' ),
 					'selectTerminal' => __( 'Select a terminal first.', 'mollie-terminal-for-woocommerce' ),
 					'failed' => __( 'Payment failed. You can try again.', 'mollie-terminal-for-woocommerce' ),
 					'canceled' => __( 'Payment canceled.', 'mollie-terminal-for-woocommerce' ),
