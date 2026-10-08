@@ -20,6 +20,10 @@ use WCPOS\WooCommercePOS\MollieTerminal\Services\MolliePaymentService;
 class PaymentSweeper {
 	public const CRON_HOOK = 'mtfwc_sweep_stale_payments';
 	public const SCHEDULE = 'mtfwc_ten_minutes';
+	// Orders whose attempt the sweep skips (paid_unverified, canceled, ...) keep
+	// their meta and stay the oldest matches, so each query pages past them in
+	// batches, examining at most this many orders per meta key per run.
+	private const MAX_EXAMINED_PER_QUERY = 200;
 
 	private $service;
 
@@ -62,7 +66,7 @@ class PaymentSweeper {
 
 	public function sweep(): void {
 		if ( ! function_exists( 'wc_get_orders' ) ) { return; }
-		$limit = (int) apply_filters( 'mtfwc_stale_payment_batch', 25 );
+		$limit = max( 1, (int) apply_filters( 'mtfwc_stale_payment_batch', 25 ) );
 		$orders = array();
 		// Orders whose current attempt may have gone stale in the browser.
 		foreach ( $this->find_orders( array( 'pending', 'failed' ), PaymentAttempt::META_CURRENT_PAYMENT_ID, $limit ) as $order ) {
@@ -78,6 +82,9 @@ class PaymentSweeper {
 		if ( empty( $orders ) ) { return; }
 		$swept = 0;
 		foreach ( $orders as $order ) {
+			// At most two batches of orders acted on (Mollie calls) per run, as when
+			// each query fetched a single batch.
+			if ( $swept >= 2 * $limit ) { break; }
 			if ( $this->sweep_order( $order ) ) { $swept++; }
 		}
 		if ( $swept > 0 ) {
@@ -85,14 +92,32 @@ class PaymentSweeper {
 		}
 	}
 
-	/** @param string|array $status */
+	/**
+	 * Oldest matching orders, fetched in pages of $limit up to MAX_EXAMINED_PER_QUERY.
+	 * All pages are read before any order is swept, so orders leaving the set
+	 * (completed, cancelled) cannot shift a later page past an unseen order.
+	 *
+	 * @param string|array $status
+	 */
 	private function find_orders( $status, string $meta_key, int $limit ): array {
+		$found = array();
+		for ( $page = 1; ( $page - 1 ) * $limit < self::MAX_EXAMINED_PER_QUERY; $page++ ) {
+			$batch = $this->find_orders_page( $status, $meta_key, $limit, $page );
+			$found = array_merge( $found, $batch );
+			if ( count( $batch ) < $limit ) { break; }
+		}
+		return $found;
+	}
+
+	/** @param string|array $status */
+	private function find_orders_page( $status, string $meta_key, int $limit, int $page ): array {
 		$orders = wc_get_orders(
 			array(
 				// Refunds are order objects too and come back by default. They never
 				// carry the attempt meta and lack the WC_Order methods the sweep calls.
 				'type'         => 'shop_order',
 				'limit'        => $limit,
+				'paged'        => $page,
 				'status'       => $status,
 				'orderby'      => 'date',
 				'order'        => 'ASC',
