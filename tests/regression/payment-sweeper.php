@@ -6,13 +6,26 @@ function expect( $condition, $message = 'expectation failed' ) { if ( ! $conditi
 if ( ! defined( 'MINUTE_IN_SECONDS' ) ) { define( 'MINUTE_IN_SECONDS', 60 ); }
 function add_action( $hook, $cb = null, $priority = 10, $args = 1 ) {}
 function add_filter( $hook, $cb = null, $priority = 10, $args = 1 ) {}
-function apply_filters( $hook, $value ) { return $value; }
+function apply_filters( $hook, $value ) { return $GLOBALS['sweeper_filters'][ $hook ] ?? $value; }
 function __( $text, $domain = null ) { return $text; }
 function wp_json_encode( $value ) { return json_encode( $value ); }
 class NoopWooLoggerForSweeper { public function log( $level, $message, $context = array() ) {} }
 function wc_get_logger() { return new NoopWooLoggerForSweeper(); }
 $captured_order_queries = array();
-function wc_get_orders( $args ) { global $captured_order_queries; $captured_order_queries[] = $args; return array(); }
+// Orders carrying a current attempt / abandoned payments, oldest first; honours
+// limit with offset (or paged) like WooCommerce, and counts what it returns.
+$GLOBALS['sweeper_fetched'] = array();
+$GLOBALS['sweeper_current_pool'] = array();
+$GLOBALS['sweeper_abandoned_pool'] = array();
+function wc_get_orders( $args ) {
+	global $captured_order_queries;
+	$captured_order_queries[] = $args;
+	$pool = '_mtfwc_current_payment_id' === ( $args['meta_key'] ?? '' ) ? $GLOBALS['sweeper_current_pool'] : $GLOBALS['sweeper_abandoned_pool'];
+	$offset = isset( $args['offset'] ) ? (int) $args['offset'] : ( max( 1, (int) ( $args['paged'] ?? 1 ) ) - 1 ) * $args['limit'];
+	$batch = array_slice( $pool, $offset, $args['limit'] );
+	$GLOBALS['sweeper_fetched'][ $args['meta_key'] ] = ( $GLOBALS['sweeper_fetched'][ $args['meta_key'] ] ?? 0 ) + count( $batch );
+	return $batch;
+}
 function wc_get_order( $id ) {
 	$fresh = $GLOBALS['sweeper_fresh_order'] ?? null;
 	return $fresh && $fresh->get_id() === $id ? $fresh : false;
@@ -39,8 +52,9 @@ class FakeOrderForSweeper {
 	public $paid = false;
 	public $notes = array();
 	public $saves = 0;
+	public $id = 4242;
 	public function is_paid() { return $this->paid; }
-	public function get_id() { return 4242; }
+	public function get_id() { return $this->id; }
 	public $payment_method = '';
 	public $payment_method_title = '';
 	public function get_payment_method() { return $this->payment_method; }
@@ -56,7 +70,15 @@ class CountingCancelService extends MolliePaymentService {
 	public $abandoned_calls = 0;
 	public $abandoned_result = array( 'tr_abandoned' => 'canceled' );
 	public function __construct() {}
+	public $polled = array();
 	public function cancel_order_payment( $order ): array { $this->cancel_calls++; return array( 'status' => 'canceled' ); }
+	// Stands in for the real recovery (asks Mollie, completes under the claim),
+	// which payment-complete-race.php covers end to end.
+	public function poll_order( $order, string $source = 'poll' ): array {
+		$this->polled[] = array( $order->get_id(), $source );
+		$order->paid = true;
+		return array( 'status' => 'paid' );
+	}
 	public function cancel_abandoned_payments( $order ): array {
 		if ( empty( PaymentAttempt::abandoned( $order ) ) ) { return array(); }
 		$this->abandoned_calls++;
@@ -160,5 +182,82 @@ expect(
 	array( PaymentAttempt::META_CURRENT_PAYMENT_ID, PaymentAttempt::META_ABANDONED_PAYMENT_IDS ) === array_column( $captured_order_queries, 'meta_key' ),
 	'the sweep must query the current-attempt key and then the abandoned-payments key'
 );
+
+// #31 review: orders whose attempt the sweep skips (paid_unverified, canceled)
+// keep their meta and stay the oldest matches. A full batch of them must not hide
+// a newer order whose completion died: the sweep pages past them on the same run.
+$GLOBALS['sweeper_current_pool'] = array();
+for ( $i = 0; $i < 30; $i++ ) {
+	$skipped = make_sweeper_order( 0 === $i % 2 ? PaymentAttempt::STATUS_PAID_UNVERIFIED : 'canceled', 20 * MINUTE_IN_SECONDS );
+	$skipped->id = 5000 + $i;
+	$GLOBALS['sweeper_current_pool'][] = $skipped;
+}
+$recoverable = make_sweeper_order( 'paid', 20 * MINUTE_IN_SECONDS );
+$recoverable->id = 6000;
+$GLOBALS['sweeper_current_pool'][] = $recoverable;
+$service = new CountingCancelService();
+$sweeper = new PaymentSweeper( $service );
+$captured_order_queries = array();
+$sweeper->sweep();
+expect( array( array( 6000, 'stale_sweep' ) ) === $service->polled, 'the sweep must reach a recoverable order behind a full batch of skipped ones on the same run (recovered: ' . json_encode( $service->polled ) . ')' );
+expect( true === $recoverable->paid, 'the recoverable order is completed on that run' );
+expect( 0 === $service->cancel_calls, 'skipped final attempts are never canceled' );
+expect( array( PaymentAttempt::META_CURRENT_PAYMENT_ID, PaymentAttempt::META_CURRENT_PAYMENT_ID, PaymentAttempt::META_ABANDONED_PAYMENT_IDS ) === array_column( $captured_order_queries, 'meta_key' ), 'the current-attempt query reads batches until a short one; the abandoned query stops at an empty one' );
+
+// The examined set is bounded: 300 skipped orders are read in pages of 25 up to 200.
+$GLOBALS['sweeper_current_pool'] = array();
+for ( $i = 0; $i < 300; $i++ ) {
+	$skipped = make_sweeper_order( 'canceled', 20 * MINUTE_IN_SECONDS );
+	$skipped->id = 7000 + $i;
+	$GLOBALS['sweeper_current_pool'][] = $skipped;
+}
+$captured_order_queries = array();
+$sweeper->sweep();
+$current_queries = array_filter( $captured_order_queries, function ( $args ) { return PaymentAttempt::META_CURRENT_PAYMENT_ID === $args['meta_key']; } );
+expect( 8 === count( $current_queries ), 'a run examines at most 200 orders (8 batches of 25) per query (ran ' . count( $current_queries ) . ' batches)' );
+
+// #31 review: a batch size that does not divide 200 still fetches at most 200.
+$GLOBALS['sweeper_filters']['mtfwc_stale_payment_batch'] = 150;
+$captured_order_queries = array();
+$GLOBALS['sweeper_fetched'] = array();
+$sweeper->sweep();
+expect( 200 === ( $GLOBALS['sweeper_fetched'][ PaymentAttempt::META_CURRENT_PAYMENT_ID ] ?? 0 ), 'with batches of 150 a run fetches at most 200 orders (fetched ' . ( $GLOBALS['sweeper_fetched'][ PaymentAttempt::META_CURRENT_PAYMENT_ID ] ?? 0 ) . ')' );
+$current_queries = array_values( array_filter( $captured_order_queries, function ( $args ) { return PaymentAttempt::META_CURRENT_PAYMENT_ID === $args['meta_key']; } ) );
+expect( array( array( 0, 150 ), array( 150, 50 ) ) === array_map( function ( $args ) { return array( $args['offset'], $args['limit'] ); }, $current_queries ), 'with batches of 150 the second batch is cut to 50, so at most 200 orders are fetched (got ' . json_encode( array_map( function ( $args ) { return array( $args['offset'], $args['limit'] ); }, $current_queries ) ) . ')' );
+unset( $GLOBALS['sweeper_filters']['mtfwc_stale_payment_batch'] );
+
+// #31 review: acting is bounded per list, one batch (25) each, so a full
+// current-attempt list cannot starve the abandoned-only list.
+$GLOBALS['sweeper_current_pool'] = array();
+for ( $i = 0; $i < 60; $i++ ) {
+	$stale = make_sweeper_order( 'open', 20 * MINUTE_IN_SECONDS );
+	$stale->id = 8000 + $i;
+	$GLOBALS['sweeper_current_pool'][] = $stale;
+}
+for ( $i = 0; $i < 60; $i++ ) {
+	$abandoned_only = make_sweeper_order( '', 0 );
+	$abandoned_only->id = 9000 + $i;
+	$abandoned_only->meta[ PaymentAttempt::META_ABANDONED_PAYMENT_IDS ] = array( 'tr_abandoned_' . $i );
+	$GLOBALS['sweeper_abandoned_pool'][] = $abandoned_only;
+}
+// An order on both lists is swept once, as part of the current-attempt batch.
+$GLOBALS['sweeper_abandoned_pool'][0] = $GLOBALS['sweeper_current_pool'][0];
+$service = new CountingCancelService();
+( new PaymentSweeper( $service ) )->sweep();
+expect( 25 === $service->cancel_calls, 'the current-attempt list acts on one batch per run (canceled ' . $service->cancel_calls . ')' );
+expect( 25 === $service->abandoned_calls, 'a full current-attempt list must not starve the abandoned-only list of its batch (resolved ' . $service->abandoned_calls . ')' );
+
+// #31 review: an order on both lists past the first batch's budget (position 26+
+// of the in-progress list) is not swept by the first batch, so the abandoned
+// batch must still sweep it.
+$late_overlap = $GLOBALS['sweeper_current_pool'][40];
+$late_overlap->meta[ PaymentAttempt::META_ABANDONED_PAYMENT_IDS ] = array( 'tr_late_overlap' );
+$GLOBALS['sweeper_abandoned_pool'] = array( $late_overlap );
+$service = new CountingCancelService();
+( new PaymentSweeper( $service ) )->sweep();
+expect( 1 === $service->abandoned_calls, 'an overlapping order past the first batch\'s budget must still be checked by the abandoned batch (resolved ' . $service->abandoned_calls . ')' );
+expect( 26 === $service->cancel_calls, 'the first batch cancels its 25; the abandoned batch sweeps the late overlapping order once, including its stale current attempt (canceled ' . $service->cancel_calls . ')' );
+$GLOBALS['sweeper_current_pool'] = array();
+$GLOBALS['sweeper_abandoned_pool'] = array();
 
 echo "payment-sweeper ok\n";

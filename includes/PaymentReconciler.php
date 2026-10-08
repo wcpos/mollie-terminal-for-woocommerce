@@ -88,10 +88,16 @@ class PaymentReconciler {
 	private function apply_payment( $order, array $payment, string $source ): array {
 		$verification = $this->verify_payment( $order, $payment );
 		$status = (string) ( $payment['status'] ?? 'unknown' );
-		PaymentAttempt::update_status( $order, $payment );
+		// A stored "paid" means "verified, complete the order": the sweep recovers it
+		// when a completion dies. A paid payment that failed verification is
+		// stored apart so the sweep does not re-verify and re-note it every run.
+		$unverified = 'paid' === $status && ! $verification['valid'];
+		PaymentAttempt::update_status( $order, $payment, $unverified ? PaymentAttempt::STATUS_PAID_UNVERIFIED : '' );
 		// Whatever resolved it — webhook, poll, cancel or the stale sweep — a
-		// payment in a final state no longer needs the sweep to chase it.
-		if ( PaymentAttempt::is_final( $status ) ) {
+		// payment in a final state no longer needs the sweep to chase it. A verified
+		// paid one is forgotten only once its order is completed, below, so the
+		// abandoned-payment sweep can still recover a completion that died.
+		if ( PaymentAttempt::is_final( $status ) && ( 'paid' !== $status || $unverified ) ) {
 			PaymentAttempt::forget_abandoned( $order, PaymentAttempt::payment_id( $payment ) );
 		}
 		if ( ! $verification['valid'] ) {
@@ -100,7 +106,9 @@ class PaymentReconciler {
 			return array( 'status' => 'verification_failed', 'payment_status' => $status, 'errors' => $verification['errors'] );
 		}
 		if ( 'paid' === $status ) {
-			return $this->complete_paid_order( $order, $payment, $source );
+			$result = $this->complete_paid_order( $order, $payment, $source );
+			PaymentAttempt::forget_abandoned( $order, PaymentAttempt::payment_id( $payment ) );
+			return $result;
 		}
 		if ( in_array( $status, array( 'failed', 'canceled', 'expired' ), true ) ) {
 			$order->add_order_note( sprintf( 'Mollie Terminal payment %s via %s.', $status, $source ) );

@@ -246,15 +246,16 @@ class Gateway extends WC_Payment_Gateway {
 		// Resume the poll loop on reload when an unfinished payment is still open
 		// for this order — otherwise a refresh mid-payment drops the cashier back
 		// to an idle panel while the payment lingers open on Mollie. An attempt
-		// stored as paid on an unpaid order (completion died after recording it)
-		// resumes too: the poll reconciles it and completes the order.
+		// Mollie reported paid on an unpaid order (its completion died after
+		// recording it, or it failed verification) resumes too: the poll asks
+		// Mollie again and reconciles it.
 		$resume = false;
 		$resume_channel = 'terminal';
 		$resume_method = '';
 		if ( $order && ! $order->is_paid() ) {
 			$current = PaymentAttempt::current( $order );
 			$status = (string) ( $current['status'] ?? '' );
-			if ( $current && ! empty( $current['payment_id'] ) && ( PaymentAttempt::is_non_final( $status ) || 'paid' === $status ) ) {
+			if ( $current && ! empty( $current['payment_id'] ) && ( PaymentAttempt::is_non_final( $status ) || PaymentAttempt::reported_paid( $status ) ) ) {
 				$resume = true;
 				$resume_method = (string) ( $current['method'] ?? '' );
 				$resume_channel = PaymentAttempt::is_qr_method( $resume_method ) ? 'qr' : 'terminal';

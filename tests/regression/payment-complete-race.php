@@ -17,10 +17,12 @@ require_once __DIR__ . '/../../includes/PaymentReconciler.php';
 require_once __DIR__ . '/../../includes/Services/MollieApiClient.php';
 require_once __DIR__ . '/../../includes/Services/TerminalService.php';
 require_once __DIR__ . '/../../includes/Services/MolliePaymentService.php';
+require_once __DIR__ . '/../../includes/PaymentSweeper.php';
 
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentAttempt;
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentLock;
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentReconciler;
+use WCPOS\WooCommercePOS\MollieTerminal\PaymentSweeper;
 use WCPOS\WooCommercePOS\MollieTerminal\Settings;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieApiClient;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MolliePaymentService;
@@ -316,6 +318,97 @@ expect( 'processing' === $GLOBALS['mtfwc_order_rows'][38029]['status'] && $payme
 $GLOBALS['mtfwc_post_cache'] = array();
 $third = $service->poll_order( wc_get_order( 38029 ) );
 expect( 'paid' === ( $third['status'] ?? '' ) && 2 === $poll_client->gets && 1 === $GLOBALS['mtfwc_payment_complete_calls'], 'once the order is paid, the stored paid attempt is answered without asking Mollie again' );
+
+// Scenario 3f: the stale-payment sweep recovers a completion that died after
+// storing the verified attempt as paid (nobody reopened the checkout): it
+// completes the order once under the claim, and leaves it alone on the next run.
+function race_notes_matching( string $needle ): int {
+	return count( array_filter( $GLOBALS['mtfwc_order_notes'], function ( $note ) use ( $needle ) { return false !== strpos( $note, $needle ); } ) );
+}
+function race_stored_status(): array {
+	$meta = $GLOBALS['mtfwc_order_rows'][38029]['meta'];
+	return array( $meta[ PaymentAttempt::META_CURRENT_PAYMENT_STATUS ] ?? '', $meta[ PaymentAttempt::META_ATTEMPTS ][0]['status'] ?? '' );
+}
+// Each sweep or poll is a new request: no per-request order or meta cache yet.
+function race_new_request(): void {
+	$GLOBALS['mtfwc_post_cache'] = array();
+	$GLOBALS['mtfwc_meta_cache'] = array();
+}
+function race_sweep_run( MolliePaymentService $service ): bool {
+	race_new_request();
+	return ( new PaymentSweeper( $service ) )->sweep_order( wc_get_order( 38029 ) );
+}
+reset_race_order();
+$GLOBALS['mtfwc_order_rows'][38029]['meta'][ PaymentAttempt::META_ATTEMPTS ] = array( array( 'payment_id' => $payment['id'], 'method' => 'pointofsale', 'status' => 'open' ) );
+$holder_copy = wc_get_order( 38029 );
+PaymentAttempt::update_status( $holder_copy, $payment );
+expect( array( 'paid', 'paid' ) === race_stored_status() && 'pending' === $GLOBALS['mtfwc_order_rows'][38029]['status'], 'setup: a verified attempt is stored paid on a still-unpaid order' );
+$sweep_client = new FakeRaceClient( $payment );
+$sweep_service = new MolliePaymentService( $sweep_client, new Settings( array( 'mode' => 'live' ) ) );
+expect( true === race_sweep_run( $sweep_service ), 'the sweep must act on a paid attempt whose order is unpaid' );
+expect( 1 === $GLOBALS['mtfwc_payment_complete_calls'] && 1 === $GLOBALS['mtfwc_stock_reductions'], 'the sweep must complete the died-after-paid order exactly once (completed ' . $GLOBALS['mtfwc_payment_complete_calls'] . ' times)' );
+expect( 'processing' === $GLOBALS['mtfwc_order_rows'][38029]['status'] && $payment['id'] === $GLOBALS['mtfwc_order_rows'][38029]['transaction_id'], 'the recovered order must be paid by the Mollie payment' );
+expect( 1 === race_notes_matching( 'completed via stale_sweep' ), 'the recovery must be noted once as the sweep\'s' );
+expect( ! isset( $wpdb->rows[ $key ] ), 'the sweep must release the completion claim' );
+$gets_after_first = $sweep_client->gets;
+$notes_after_first = count( $GLOBALS['mtfwc_order_notes'] );
+expect( false === race_sweep_run( $sweep_service ), 'the next sweep leaves the completed order alone' );
+expect( 1 === $GLOBALS['mtfwc_payment_complete_calls'] && $gets_after_first === $sweep_client->gets && $notes_after_first === count( $GLOBALS['mtfwc_order_notes'] ), 'the next sweep neither asks Mollie, completes nor notes again' );
+
+// Scenario 3g: a paid payment that fails verification is stored as paid_unverified,
+// noted once, and never re-verified or re-noted by later sweeps. This starts from
+// what 0.5.7-0.5.10 stored for it ("paid"), so it also covers upgraded stores: the
+// first sweep verifies it once more, notes it once and moves it to paid_unverified.
+reset_race_order();
+$GLOBALS['mtfwc_order_rows'][38029]['meta'][ PaymentAttempt::META_ATTEMPTS ] = array( array( 'payment_id' => $payment['id'], 'method' => 'pointofsale', 'status' => 'open' ) );
+$mismatch = $payment;
+$mismatch['amount']['value'] = '99.00';
+PaymentAttempt::update_status( wc_get_order( 38029 ), $mismatch );
+race_new_request();
+$unverified_client = new FakeRaceClient( $mismatch );
+$unverified_service = new MolliePaymentService( $unverified_client, new Settings( array( 'mode' => 'live' ) ) );
+race_sweep_run( $unverified_service );
+expect( 1 === race_notes_matching( 'verification failed via stale_sweep' ), 'the sweep notes a verification failure once' );
+expect( array( PaymentAttempt::STATUS_PAID_UNVERIFIED, PaymentAttempt::STATUS_PAID_UNVERIFIED ) === race_stored_status(), 'a paid payment that fails verification must be stored as paid_unverified (stored: ' . json_encode( race_stored_status() ) . ')' );
+expect( 0 === $GLOBALS['mtfwc_payment_complete_calls'] && 'pending' === $GLOBALS['mtfwc_order_rows'][38029]['status'], 'an unverified payment must not complete the order' );
+$gets_after_first = $unverified_client->gets;
+$saves_after_first = $GLOBALS['mtfwc_saves'];
+for ( $run = 2; $run <= 3; $run++ ) {
+	expect( false === race_sweep_run( $unverified_service ), "sweep run $run must leave a paid_unverified attempt alone" );
+}
+expect( 1 === race_notes_matching( 'verification failed' ), 'later sweeps must not re-note a paid_unverified attempt (notes: ' . implode( ' | ', $GLOBALS['mtfwc_order_notes'] ) . ')' );
+expect( $gets_after_first === $unverified_client->gets && $saves_after_first === $GLOBALS['mtfwc_saves'], 'later sweeps must neither ask Mollie nor save the order' );
+// The cashier's poll still re-verifies it (as in 0.5.10): still mismatched ->
+// verification_failed, which the panel treats as failed; once it verifies -> paid.
+race_new_request();
+$cashier_poll = $unverified_service->poll_order( wc_get_order( 38029 ) );
+expect( 'verification_failed' === ( $cashier_poll['status'] ?? '' ) && $gets_after_first + 1 === $unverified_client->gets, 'a poll of a paid_unverified attempt asks Mollie again and reports verification_failed' );
+expect( array( PaymentAttempt::STATUS_PAID_UNVERIFIED, PaymentAttempt::STATUS_PAID_UNVERIFIED ) === race_stored_status(), 'a repeated verification failure keeps paid_unverified' );
+$unverified_client->payment = $payment;
+race_new_request();
+$verified_poll = $unverified_service->poll_order( wc_get_order( 38029 ) );
+expect( 'paid' === ( $verified_poll['status'] ?? '' ) && 1 === $GLOBALS['mtfwc_payment_complete_calls'], 'a poll that now verifies a paid_unverified attempt completes the order once' );
+expect( array( 'paid', 'paid' ) === race_stored_status(), 'a verified payment is stored paid again' );
+// The panel never sees the stored name: a paid order's paid_unverified attempt reads as verification_failed.
+$GLOBALS['mtfwc_order_rows'][38029]['meta'][ PaymentAttempt::META_CURRENT_PAYMENT_STATUS ] = PaymentAttempt::STATUS_PAID_UNVERIFIED;
+race_new_request();
+expect( array( 'status' => 'verification_failed' ) === $unverified_service->poll_order( wc_get_order( 38029 ) ), 'the stored paid_unverified name never reaches the panel' );
+
+// Scenario 3h: a set-aside (abandoned) payment that turns out paid stays on the
+// abandoned list until its order is completed, so the abandoned-payment sweep
+// retries it when the completing request dies before payment_complete().
+reset_race_order();
+$GLOBALS['mtfwc_order_rows'][38029]['meta'][ PaymentAttempt::META_ABANDONED_PAYMENT_IDS ] = array( $payment['id'] );
+$GLOBALS['mtfwc_throw_completion'] = true;
+try {
+	$reconciler->reconcile( wc_get_order( 38029 ), $payment, 'abandoned_sweep' );
+	expect( false, 'the dying completion must throw' );
+} catch ( RuntimeException $e ) {}
+expect( array( $payment['id'] ) === ( $GLOBALS['mtfwc_order_rows'][38029]['meta'][ PaymentAttempt::META_ABANDONED_PAYMENT_IDS ] ?? null ), 'a paid abandoned payment must stay listed until its order is completed' );
+race_new_request();
+$retried = $reconciler->reconcile( wc_get_order( 38029 ), $payment, 'abandoned_sweep' );
+expect( 'paid' === $retried['status'] && 1 === $GLOBALS['mtfwc_payment_complete_calls'], 'the retry completes the order once' );
+expect( ! isset( $GLOBALS['mtfwc_order_rows'][38029]['meta'][ PaymentAttempt::META_ABANDONED_PAYMENT_IDS ] ), 'a completed paid payment leaves the abandoned list' );
 
 // Scenario 4: recover a claim left by a request that died.
 reset_race_order();
