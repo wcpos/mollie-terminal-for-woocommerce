@@ -96,6 +96,8 @@ expect( array( 'tr_open' ) === PaymentAttempt::abandoned( $order ), 'abandon mus
 // under the cancel lock: a payable order, or a different current payment, is
 // skipped before Mollie is asked anything.
 require_once __DIR__ . '/../../includes/PaymentCleanup.php';
+// reload_order() reads the order afresh through wc_get_order(); unset, the caller's copy is used.
+function wc_get_order( $id ) { return $GLOBALS['mtfwc_fresh_order'] ?? false; }
 $order  = seed_order();
 $order->status = 'pending';
 $client = new ScriptedMollieClient( array( array( 'id' => 'tr_open', 'status' => 'open', 'isCancelable' => true ) ) );
@@ -115,6 +117,24 @@ $client = new ScriptedMollieClient( array(
 ) );
 $result = ( new MolliePaymentService( $client, $settings, $terminals ) )->cancel_order_payment( $order, 'tr_open' );
 expect( 'canceled' === ( $result['status'] ?? '' ) && 1 === $client->cancel_calls, 'a named cancel on a non-payable order with that payment current proceeds' );
+// The checks run on the order as stored now, not on the caller's copy: the retry
+// loaded a non-payable order, but it was reopened (or got a new payment) since.
+$order  = seed_order();
+$order->status = 'processing';
+$fresh  = seed_order();
+$fresh->status = 'pending';
+$GLOBALS['mtfwc_fresh_order'] = $fresh;
+$client = new ScriptedMollieClient( array( array( 'id' => 'tr_open', 'status' => 'open', 'isCancelable' => true ) ) );
+$result = ( new MolliePaymentService( $client, $settings, $terminals ) )->cancel_order_payment( $order, 'tr_open' );
+expect( 'skipped' === ( $result['status'] ?? '' ) && 0 === $client->cancel_calls && 0 === $client->get_calls, 'a named cancel is skipped when the stored order is payable although the caller\'s copy is not' );
+$fresh  = seed_order();
+$fresh->status = 'processing';
+$fresh->meta[ PaymentAttempt::META_CURRENT_PAYMENT_ID ] = 'tr_newer';
+$GLOBALS['mtfwc_fresh_order'] = $fresh;
+$client = new ScriptedMollieClient( array( array( 'id' => 'tr_open', 'status' => 'open', 'isCancelable' => true ) ) );
+$result = ( new MolliePaymentService( $client, $settings, $terminals ) )->cancel_order_payment( $order, 'tr_open' );
+expect( 'skipped' === ( $result['status'] ?? '' ) && 0 === $client->cancel_calls && 0 === $client->get_calls, 'a named cancel is skipped when the stored order has a newer current payment although the caller\'s copy has the named one' );
+unset( $GLOBALS['mtfwc_fresh_order'] );
 
 // Case 2: terminal was off but payment still cancelable -> Mollie cancels it.
 $order  = seed_order();
