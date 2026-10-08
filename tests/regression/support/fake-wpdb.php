@@ -5,12 +5,15 @@ class FakeWpdb {
 	public $before_insert;
 	// Simulates $wpdb->query() returning false (a database error) for claim inserts.
 	public $insert_error = false;
+	// Every INSERT/DELETE as array( verb, option_name ), in order.
+	public $log = array();
 
 	public function prepare( $query, ...$args ) { return json_encode( array( $query, $args ) ); }
 
 	public function query( $prepared ) {
 		list( $sql, $args ) = json_decode( $prepared, true );
 		$sql = preg_replace( '/\s+/', ' ', trim( $sql ) );
+		$this->log[] = array( strtok( $sql, ' ' ), $args[0] ?? null );
 		if ( "INSERT IGNORE INTO {$this->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')" === $sql ) {
 			if ( $this->before_insert ) {
 				$callback = $this->before_insert;
