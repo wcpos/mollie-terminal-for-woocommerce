@@ -122,13 +122,12 @@ class PaymentAttempt {
 			$order->update_meta_data( self::META_ATTEMPTS, $history );
 			// The payment is (as far as we know) still open at Mollie. Deleting the
 			// current pointer would hide it from the stale-payment sweep, which
-			// queries orders by meta key, so park the ID where the sweep looks.
+			// queries orders by meta key, so park the ID where the sweep looks
+			// before the pointer goes: a crash in between leaves it on both.
 			if ( self::is_non_final( $status ) ) {
-				$abandoned = self::abandoned( $order );
-				if ( ! in_array( $payment_id, $abandoned, true ) ) {
-					$abandoned[] = $payment_id;
-					$order->update_meta_data( self::META_ABANDONED_PAYMENT_IDS, $abandoned );
-				}
+				self::change_abandoned( $order, function ( array $ids ) use ( $payment_id ) {
+					return in_array( $payment_id, $ids, true ) ? $ids : array_merge( $ids, array( $payment_id ) );
+				} );
 			}
 		}
 		$order->delete_meta_data( self::META_CURRENT_ATTEMPT_ID );
@@ -166,17 +165,35 @@ class PaymentAttempt {
 
 	/** Stop chasing an abandoned payment: it reached a final state at Mollie. */
 	public static function forget_abandoned( $order, string $payment_id ): void {
-		$abandoned = self::abandoned( $order );
-		if ( ! in_array( $payment_id, $abandoned, true ) ) { return; }
-		$remaining = array_values( array_diff( $abandoned, array( $payment_id ) ) );
+		// Not listed when this request loaded the order: nothing to do. Listed
+		// since by another request: it stays, and the sweep drops it next run.
+		if ( ! in_array( $payment_id, self::abandoned( $order ), true ) ) { return; }
+		self::change_abandoned( $order, function ( array $ids ) use ( $payment_id ) {
+			return array_values( array_diff( $ids, array( $payment_id ) ) );
+		} );
+	}
+
+	/**
+	 * Read-modify-write the abandoned list as stored now, not as $order loaded it.
+	 * The cancel path adds to it and reconciliation removes from it in different
+	 * requests under different locks, and a completion can run for seconds
+	 * (stock, emails): writing back a list read earlier would drop the other
+	 * request's entry and leave a payment open at Mollie untracked (#32). The
+	 * write goes through the re-read copy only, so $order never writes this key.
+	 */
+	private static function change_abandoned( $order, callable $change ): void {
+		$fresh = PaymentReconciler::reload_order( $order );
+		$before = self::abandoned( $fresh );
+		$after = $change( $before );
+		if ( $after === $before ) { return; }
 		// Delete rather than store an empty array: the sweep query matches on the
 		// meta key existing, not on its contents.
-		if ( empty( $remaining ) ) {
-			$order->delete_meta_data( self::META_ABANDONED_PAYMENT_IDS );
+		if ( empty( $after ) ) {
+			$fresh->delete_meta_data( self::META_ABANDONED_PAYMENT_IDS );
 		} else {
-			$order->update_meta_data( self::META_ABANDONED_PAYMENT_IDS, $remaining );
+			$fresh->update_meta_data( self::META_ABANDONED_PAYMENT_IDS, $after );
 		}
-		$order->save();
+		$fresh->save();
 	}
 
 	public static function payment_id( array $payment ): string { return (string) ( $payment['id'] ?? '' ); }

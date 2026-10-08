@@ -260,4 +260,29 @@ expect( 26 === $service->cancel_calls, 'the first batch cancels its 25; the aban
 $GLOBALS['sweeper_current_pool'] = array();
 $GLOBALS['sweeper_abandoned_pool'] = array();
 
+// #32 review: a site that lowers the action budget to 1 must not multiply the
+// scan queries: scanning keeps batches of at least 25 (at most 8 per list),
+// while acting is still limited to 1 order per list.
+$GLOBALS['sweeper_filters']['mtfwc_stale_payment_batch'] = 1;
+for ( $i = 0; $i < 300; $i++ ) {
+	$stale = make_sweeper_order( 'open', 20 * MINUTE_IN_SECONDS );
+	$stale->id = 10000 + $i;
+	$GLOBALS['sweeper_current_pool'][] = $stale;
+	$abandoned_only = make_sweeper_order( '', 0 );
+	$abandoned_only->id = 20000 + $i;
+	$abandoned_only->meta[ PaymentAttempt::META_ABANDONED_PAYMENT_IDS ] = array( 'tr_budget_' . $i );
+	$GLOBALS['sweeper_abandoned_pool'][] = $abandoned_only;
+}
+$captured_order_queries = array();
+$GLOBALS['sweeper_fetched'] = array();
+$service = new CountingCancelService();
+( new PaymentSweeper( $service ) )->sweep();
+$per_list = array_count_values( array_column( $captured_order_queries, 'meta_key' ) );
+expect( 8 === ( $per_list[ PaymentAttempt::META_CURRENT_PAYMENT_ID ] ?? 0 ) && 8 === ( $per_list[ PaymentAttempt::META_ABANDONED_PAYMENT_IDS ] ?? 0 ), 'with the budget at 1 each list is scanned in at most 8 queries (ran ' . json_encode( $per_list ) . ')' );
+expect( 200 === $GLOBALS['sweeper_fetched'][ PaymentAttempt::META_CURRENT_PAYMENT_ID ] && 200 === $GLOBALS['sweeper_fetched'][ PaymentAttempt::META_ABANDONED_PAYMENT_IDS ], 'the 200-order scan cap still holds' );
+expect( 1 === $service->cancel_calls && 1 === $service->abandoned_calls, 'the action budget of 1 per list still holds' );
+unset( $GLOBALS['sweeper_filters']['mtfwc_stale_payment_batch'] );
+$GLOBALS['sweeper_current_pool'] = array();
+$GLOBALS['sweeper_abandoned_pool'] = array();
+
 echo "payment-sweeper ok\n";

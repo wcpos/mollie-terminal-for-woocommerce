@@ -119,6 +119,11 @@ class FakeRaceOrder {
 			$GLOBALS['mtfwc_throw_completion'] = false;
 			throw new RuntimeException( 'completion failed' );
 		}
+		if ( $GLOBALS['mtfwc_during_completion'] ) {
+			$during = $GLOBALS['mtfwc_during_completion'];
+			$GLOBALS['mtfwc_during_completion'] = null;
+			$during();
+		}
 		if ( ! in_array( $this->row['status'], array( 'pending', 'failed', 'on-hold' ), true ) ) { return false; }
 		$this->row['status'] = 'processing';
 		$this->changed_fields['status'] = true;
@@ -182,6 +187,7 @@ function reset_race_order() {
 	$GLOBALS['mtfwc_saves'] = 0;
 	$GLOBALS['mtfwc_throw_completion'] = false;
 	$GLOBALS['mtfwc_missing_order'] = false;
+	$GLOBALS['mtfwc_during_completion'] = null;
 }
 
 $payment = array(
@@ -409,6 +415,36 @@ race_new_request();
 $retried = $reconciler->reconcile( wc_get_order( 38029 ), $payment, 'abandoned_sweep' );
 expect( 'paid' === $retried['status'] && 1 === $GLOBALS['mtfwc_payment_complete_calls'], 'the retry completes the order once' );
 expect( ! isset( $GLOBALS['mtfwc_order_rows'][38029]['meta'][ PaymentAttempt::META_ABANDONED_PAYMENT_IDS ] ), 'a completed paid payment leaves the abandoned list' );
+
+// Scenario 3i (#32 review): the abandoned list is read-modify-written as stored,
+// never written back from a request's earlier snapshot. While payment A completes
+// (stock, emails), the cashier's cancel abandons a newer payment B in another
+// request; forgetting A must keep B listed, or B stays open at Mollie untracked.
+$abandoned_key = PaymentAttempt::META_ABANDONED_PAYMENT_IDS;
+reset_race_order();
+$GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] = array( $payment['id'] );
+$GLOBALS['mtfwc_during_completion'] = function () use ( $abandoned_key, $payment ) {
+	$GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] = array( $payment['id'], 'tr_newerB' );
+};
+$completed = $reconciler->reconcile( wc_get_order( 38029 ), $payment, 'abandoned_sweep' );
+expect( 'paid' === $completed['status'] && 1 === $GLOBALS['mtfwc_payment_complete_calls'], 'setup: A completes the order once' );
+expect( array( 'tr_newerB' ) === ( $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] ?? null ), 'forgetting A after completion must keep a payment another request abandoned meanwhile (stored: ' . json_encode( $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] ?? null ) . ')' );
+// The same for a final unpaid A reconciled from a copy loaded before B was abandoned.
+reset_race_order();
+$GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] = array( $payment['id'] );
+$webhook_copy = wc_get_order( 38029 );
+$GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] = array( $payment['id'], 'tr_newerB' );
+race_new_request();
+$reconciler->reconcile( $webhook_copy, array_merge( $payment, array( 'status' => 'canceled' ) ), 'webhook' );
+expect( array( 'tr_newerB' ) === ( $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] ?? null ), 'forgetting a canceled A from an earlier copy must keep B (stored: ' . json_encode( $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] ?? null ) . ')' );
+// And abandon_current() adds to the stored list, not to its earlier copy's.
+reset_race_order();
+$cancel_copy = wc_get_order( 38029 );
+$GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] = array( 'tr_otherC' );
+race_new_request();
+PaymentAttempt::abandon_current( $cancel_copy );
+expect( array( 'tr_otherC', $payment['id'] ) === ( $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] ?? null ), 'abandoning must add to the stored list, keeping entries added since this copy loaded (stored: ' . json_encode( $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] ?? null ) . ')' );
+expect( ! isset( $GLOBALS['mtfwc_order_rows'][38029]['meta'][ PaymentAttempt::META_CURRENT_PAYMENT_ID ] ), 'abandoning still clears the current pointer' );
 
 // Scenario 4: recover a claim left by a request that died.
 reset_race_order();
