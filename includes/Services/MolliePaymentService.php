@@ -159,7 +159,13 @@ class MolliePaymentService {
 			// locally so the cashier regains control and can start a fresh payment
 			// or choose another method; the webhook and the stale-payment sweep
 			// reconcile the lingering Mollie payment.
-			PaymentAttempt::abandon_current( $order );
+			if ( ! PaymentAttempt::abandon_current( $order ) ) {
+				// The abandoned list is busy (another request is finishing an earlier
+				// set-aside payment on this order). Keep the current pointer so the
+				// payment stays visible to the sweep; the cashier cancels again.
+				Logger::log( 'Mollie terminal payment not abandoned: the order is busy.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'] ?? '' ), 'warning' );
+				throw new RuntimeException( __( 'Another Mollie Terminal operation is finishing on this order. Try cancelling again in a moment.', 'mollie-terminal-for-woocommerce' ) );
+			}
 			$order->add_order_note( __( 'Mollie Terminal: payment could not be canceled (terminal unresponsive); attempt abandoned locally and left for automatic cleanup.', 'mollie-terminal-for-woocommerce' ) );
 			$order->save();
 			Logger::log( 'Mollie terminal payment abandoned locally; still open at Mollie.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'] ?? '', 'status' => $payment['status'] ?? '' ), 'warning' );
