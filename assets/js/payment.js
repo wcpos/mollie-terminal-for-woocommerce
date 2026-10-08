@@ -306,6 +306,10 @@
 	function keepLiveAfterFailedCancel(root, result) {
 		startAutoPoll(root);
 		setStatus(root, cancelFailureMessage(result), 'error');
+		// The cashier may have picked another method while the cancel was in
+		// flight (the switch handler skips a panel that is not polling): put the
+		// order back on this gateway while its payment stands.
+		reselectGateway(root);
 	}
 
 	function resultQrCode(result) {
@@ -797,10 +801,7 @@
 				return;
 			}
 			if (!result || !result.ok || !result.json || !result.json.success) {
-				// The terminal payment is still live: put the order back on this
-				// gateway so no other method is taken for it while it stands.
 				keepLiveAfterFailedCancel(root, result);
-				reselectGateway(root);
 				return;
 			}
 			var status = resultStatus(result);
