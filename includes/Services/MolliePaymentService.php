@@ -4,6 +4,7 @@ namespace WCPOS\WooCommercePOS\MollieTerminal\Services;
 use RuntimeException;
 use WCPOS\WooCommercePOS\MollieTerminal\Logger;
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentAttempt;
+use WCPOS\WooCommercePOS\MollieTerminal\PaymentCleanup;
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentLock;
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentReconciler;
 use WCPOS\WooCommercePOS\MollieTerminal\Settings;
@@ -130,12 +131,21 @@ class MolliePaymentService {
 	}
 
 	/**
-	 * @param string $only_payment_id When given, cancel only if this is still the
-	 *                                current payment (checked under the lock): the
-	 *                                cleanup retry must never cancel a newer attempt.
+	 * @param string $only_payment_id Set by the cleanup retry: the order is re-read
+	 *                                under the lock and the cancel proceeds only if
+	 *                                the order is still non-payable and this is still
+	 *                                its current payment, so a payment the cashier
+	 *                                resumed or replaced in the meantime is not canceled.
 	 */
 	public function cancel_order_payment( $order, string $only_payment_id = '' ): array {
 		return PaymentLock::with_lock( (int) $order->get_id(), 'cancel_payment', function () use ( $order, $only_payment_id ) {
+			if ( '' !== $only_payment_id ) {
+				$order = PaymentReconciler::reload_order( $order );
+				if ( ! in_array( (string) $order->get_status(), PaymentCleanup::NON_PAYABLE, true ) ) {
+					Logger::log( 'Mollie terminal cancel skipped: the order is payable again.', array( 'order_id' => (int) $order->get_id(), 'status' => (string) $order->get_status() ), 'info' );
+					return array( 'status' => 'skipped' );
+				}
+			}
 			$current = PaymentAttempt::current( $order );
 			if ( ! $current ) {
 				Logger::log( 'Mollie terminal cancel skipped because no payment attempt exists.', array( 'order_id' => (int) $order->get_id() ), 'info' );
