@@ -296,6 +296,23 @@ async function flush() {
 	await fireTimers();
 	await resolveNext({ status: 'paid', redirect_url: thankYouUrl });
 
+	// #28 review: after a refresh, an attempt stored as paid on an unpaid order
+	// renders with data-resume="1". The panel polls on load, keeps polling while
+	// the server reports the order completing, and completes once it is paid.
+	const paidResumePanel = makePanel('7777', { 'data-resume': '1' });
+	panels.push(paidResumePanel);
+	jqueryHandlers.updated_checkout();
+	await resolveNext({ terminals: [{ id: 'term_default', label: 'Back office', status: 'active' }], default_terminal_id: 'term_default' });
+	assert(paidResumePanel.mtfwcPoll, 'a panel resuming a stored paid attempt arms the poll loop on load');
+	await fireTimers();
+	assert.strictEqual(lastAction(), 'mtfwc_poll_payment', 'the resumed panel polls without a Start click');
+	assert.strictEqual(fetchCalls[fetchCalls.length - 1].options.body.fields.order_id, '7777', 'the resumed poll targets its order');
+	await resolveNext({ status: 'pending', completing: true, retry_allowed: false });
+	assert(paidResumePanel.mtfwcPoll && /finishing/i.test(paidResumePanel.querySelector('.mtfwc-payment-status').textContent), 'a completing answer keeps the resumed panel polling');
+	await fireTimers();
+	await resolveNext({ status: 'paid', redirect_url: thankYouUrl });
+	assert.strictEqual(paidResumePanel.mtfwcCompleted, true, 'the resumed panel completes the order once the poll reports it paid');
+
 	// A failed cancel request must surface an error, not silently reset.
 	const cancelPanel = makePanel('654');
 	panels.push(cancelPanel);
