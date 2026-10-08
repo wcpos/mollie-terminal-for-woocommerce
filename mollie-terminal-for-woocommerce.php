@@ -55,6 +55,7 @@ register_activation_hook( __FILE__, __NAMESPACE__ . '\\mtfwc_activate' );
 
 function mtfwc_deactivate(): void {
 	PaymentSweeper::unschedule();
+	PaymentCleanup::unschedule();
 }
 register_deactivation_hook( __FILE__, __NAMESPACE__ . '\\mtfwc_deactivate' );
 

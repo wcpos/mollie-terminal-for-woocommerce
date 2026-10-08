@@ -294,6 +294,20 @@
 		}
 	}
 
+	// A cancel the server refused or never received leaves the attempt current
+	// there, so the panel stays live: Cancel remains the action and polling goes
+	// on. Offering Start would only resume that same attempt. The server's reason
+	// (e.g. "try cancelling again in a moment") is shown when it gave one.
+	function cancelFailureMessage(result) {
+		var data = result && result.json ? result.json.data : null;
+		return 'string' === typeof data && data ? data : t('requestFailed', 'Mollie Terminal request failed. Copy logs for support.');
+	}
+
+	function keepLiveAfterFailedCancel(root, result) {
+		startAutoPoll(root);
+		setStatus(root, cancelFailureMessage(result), 'error');
+	}
+
 	function resultQrCode(result) {
 		return result && result.json && result.json.data ? result.json.data.qr_code || null : null;
 	}
@@ -525,6 +539,10 @@
 					resumeCompleting(root);
 					return;
 				}
+				if (!result || !result.ok || !result.json || !result.json.success) {
+					keepLiveAfterFailedCancel(root, result);
+					return;
+				}
 				setStatus(root, t('timedOut', 'Timed out waiting for the terminal. Check the terminal or try again.'), 'error');
 				resetToIdle(root);
 			});
@@ -704,8 +722,7 @@
 		postAction(root, 'mtfwc_cancel_payment').then(function (result) {
 			root.setAttribute('data-mtfwc-request-pending', 'false');
 			if (!result || !result.ok || !result.json || !result.json.success) {
-				setStatus(root, t('requestFailed', 'Mollie Terminal request failed. Copy logs for support.'), 'error');
-				resetToIdle(root);
+				keepLiveAfterFailedCancel(root, result);
 				return;
 			}
 			var status = resultStatus(result);
@@ -780,8 +797,10 @@
 				return;
 			}
 			if (!result || !result.ok || !result.json || !result.json.success) {
-				setStatus(root, t('requestFailed', 'Mollie Terminal request failed. Copy logs for support.'), 'error');
-				resetToIdle(root);
+				// The terminal payment is still live: put the order back on this
+				// gateway so no other method is taken for it while it stands.
+				keepLiveAfterFailedCancel(root, result);
+				reselectGateway(root);
 				return;
 			}
 			var status = resultStatus(result);

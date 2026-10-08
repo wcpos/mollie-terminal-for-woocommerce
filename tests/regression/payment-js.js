@@ -326,7 +326,8 @@ async function flush() {
 	assert(!unverifiedResumePanel.mtfwcCompleted, 'a verification failure never completes the order');
 	assert(/failed/i.test(unverifiedResumePanel.querySelector('.mtfwc-payment-status').textContent), 'a verification failure is reported as a failed payment');
 
-	// A failed cancel request must surface an error, not silently reset.
+	// A failed cancel request must surface an error and keep the attempt live:
+	// the server still holds it as current, so Cancel stays and polling goes on.
 	const cancelPanel = makePanel('654');
 	panels.push(cancelPanel);
 	jqueryHandlers.updated_checkout();
@@ -340,7 +341,19 @@ async function flush() {
 	await resolveError();
 	assert(/failed/i.test(cancelPanel.querySelector('.mtfwc-payment-status').textContent), 'a failed cancel should show an error status');
 	assert.strictEqual(cancelAction.disabled, false, 'button re-enables after a failed cancel');
-	assert.strictEqual(cancelAction.getAttribute('data-mtfwc-mode'), 'start', 'button returns to start mode after a failed cancel');
+	assert.strictEqual(cancelAction.getAttribute('data-mtfwc-mode'), 'cancel', 'button stays in cancel mode after a failed cancel');
+	assert(cancelPanel.mtfwcPoll, 'polling resumes after a failed cancel');
+	// #34: the server refused to set the payment aside (the order was busy) and
+	// said so; the cashier sees that reason and can cancel again.
+	cancelAction.click();
+	assert.strictEqual(lastAction(), 'mtfwc_cancel_payment', 'cancel can be retried after a failure');
+	await resolveError('Another Mollie Terminal operation is finishing on this order. Try cancelling again in a moment.');
+	assert(/cancelling again/i.test(cancelPanel.querySelector('.mtfwc-payment-status').textContent), 'a refused cancel shows the server\'s retry message');
+	assert.strictEqual(cancelAction.getAttribute('data-mtfwc-mode'), 'cancel', 'a refused cancel keeps the cancel button');
+	assert(cancelPanel.mtfwcPoll, 'a refused cancel keeps polling');
+	cancelAction.click();
+	await resolveNext({ status: 'canceled' });
+	assert.strictEqual(cancelAction.getAttribute('data-mtfwc-mode'), 'start', 'the retried cancel returns the panel to start mode');
 
 	// Abandon path: when the server cannot cancel (terminal off) it returns
 	// "abandoned"; the panel frees up so a fresh Start works.

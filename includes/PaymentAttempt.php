@@ -112,11 +112,27 @@ class PaymentAttempt {
 	 * lingering Mollie payment is reconciled later by the webhook (looked up via
 	 * metadata order_id) or canceled by the stale-payment sweep, which finds it
 	 * through META_ABANDONED_PAYMENT_IDS now that the current pointer is gone.
+	 *
+	 * Returns false, with the order untouched, when the payment is still open
+	 * and could not be parked because the abandoned list is busy: the current
+	 * pointer then keeps the payment visible to the sweep and the caller tells
+	 * the cashier to try again, instead of clearing the pointer on a write the
+	 * busy request could overwrite.
 	 */
-	public static function abandon_current( $order ): void {
+	public static function abandon_current( $order ): bool {
 		$payment_id = (string) $order->get_meta( self::META_CURRENT_PAYMENT_ID );
 		if ( '' !== $payment_id ) {
 			$status = (string) $order->get_meta( self::META_CURRENT_PAYMENT_STATUS );
+			// The payment is (as far as we know) still open at Mollie. Deleting the
+			// current pointer would hide it from the stale-payment sweep, which
+			// queries orders by meta key, so park the ID where the sweep looks
+			// before the pointer goes: a crash in between leaves it on both.
+			if ( self::is_non_final( $status ) ) {
+				$parked = self::change_abandoned( $order, function ( array $ids ) use ( $payment_id ) {
+					return in_array( $payment_id, $ids, true ) ? $ids : array_merge( $ids, array( $payment_id ) );
+				} );
+				if ( ! $parked ) { return false; }
+			}
 			$history = self::history( $order );
 			foreach ( $history as &$attempt ) {
 				if ( ( $attempt['payment_id'] ?? '' ) === $payment_id && self::is_non_final( (string) ( $attempt['status'] ?? '' ) ) ) {
@@ -126,15 +142,6 @@ class PaymentAttempt {
 			}
 			unset( $attempt );
 			$order->update_meta_data( self::META_ATTEMPTS, $history );
-			// The payment is (as far as we know) still open at Mollie. Deleting the
-			// current pointer would hide it from the stale-payment sweep, which
-			// queries orders by meta key, so park the ID where the sweep looks
-			// before the pointer goes: a crash in between leaves it on both.
-			if ( self::is_non_final( $status ) ) {
-				self::change_abandoned( $order, function ( array $ids ) use ( $payment_id ) {
-					return in_array( $payment_id, $ids, true ) ? $ids : array_merge( $ids, array( $payment_id ) );
-				}, true );
-			}
 		}
 		$order->delete_meta_data( self::META_CURRENT_ATTEMPT_ID );
 		$order->delete_meta_data( self::META_CURRENT_PAYMENT_ID );
@@ -143,6 +150,7 @@ class PaymentAttempt {
 		$order->delete_meta_data( self::META_CURRENT_PAYMENT_STATUS );
 		$order->delete_meta_data( self::META_CURRENT_PAYMENT_CREATED_AT );
 		$order->save();
+		return true;
 	}
 
 	public static function history( $order ): array {
@@ -174,9 +182,11 @@ class PaymentAttempt {
 		// Not listed when this request loaded the order: nothing to do. Listed
 		// since by another request: it stays, and the sweep drops it next run.
 		if ( ! in_array( $payment_id, self::abandoned( $order ), true ) ) { return; }
+		// A removal that finds the list busy gives up: the leftover entry costs
+		// one lookup on the next sweep, which forgets it then.
 		self::change_abandoned( $order, function ( array $ids ) use ( $payment_id ) {
 			return array_values( array_diff( $ids, array( $payment_id ) ) );
-		}, false );
+		} );
 	}
 
 	/**
@@ -189,16 +199,12 @@ class PaymentAttempt {
 	 *
 	 * Re-read, compute and save run under a per-order ABANDONED_LOCK, so two
 	 * requests cannot both read the same list and the later save drop the
-	 * earlier one's change (#33). When the lock cannot be claimed within
-	 * ABANDONED_LOCK_WAITS_MS, or the claim hits a database error:
-	 * - a removal ($write_without_lock false, forget_abandoned) gives up. A
-	 *   leftover entry is harmless: the sweep resolves it again once the payment
-	 *   is final and forgets it then, so the removal is idempotent;
-	 * - an addition ($write_without_lock true, abandon_current) writes anyway,
-	 *   still through the re-read: dropping it would hide a payment still open
-	 *   at Mollie from the sweep, the worse failure.
+	 * earlier one's change (#33). Returns false without writing when the lock
+	 * cannot be claimed within ABANDONED_LOCK_WAITS_MS or the claim hits a
+	 * database error; the list is never written outside the lock, and each
+	 * caller decides what its unwritten change means.
 	 */
-	private static function change_abandoned( $order, callable $change, bool $write_without_lock ): void {
+	private static function change_abandoned( $order, callable $change ): bool {
 		$order_id = (int) $order->get_id();
 		$claim = PaymentLock::claim( $order_id, self::ABANDONED_LOCK, self::ABANDONED_LOCK_TTL );
 		foreach ( self::ABANDONED_LOCK_WAITS_MS as $wait_ms ) {
@@ -207,14 +213,14 @@ class PaymentAttempt {
 			$claim = PaymentLock::claim( $order_id, self::ABANDONED_LOCK, self::ABANDONED_LOCK_TTL );
 		}
 		if ( PaymentLock::ACQUIRED !== $claim ) {
-			Logger::log( 'Mollie Terminal abandoned-payment list is busy' . ( $write_without_lock ? '; adding without the lock.' : '; leaving the entry for the next sweep.' ), array( 'order_id' => $order_id, 'claim' => $claim ), 'warning' );
-			if ( ! $write_without_lock ) { return; }
+			Logger::log( 'Mollie Terminal abandoned-payment list is busy; change not written.', array( 'order_id' => $order_id, 'claim' => $claim ), 'warning' );
+			return false;
 		}
 		try {
 			$fresh = PaymentReconciler::reload_order( $order );
 			$before = self::abandoned( $fresh );
 			$after = $change( $before );
-			if ( $after === $before ) { return; }
+			if ( $after === $before ) { return true; }
 			// Delete rather than store an empty array: the sweep query matches on the
 			// meta key existing, not on its contents.
 			if ( empty( $after ) ) {
@@ -223,10 +229,9 @@ class PaymentAttempt {
 				$fresh->update_meta_data( self::META_ABANDONED_PAYMENT_IDS, $after );
 			}
 			$fresh->save();
+			return true;
 		} finally {
-			if ( PaymentLock::ACQUIRED === $claim ) {
-				PaymentLock::release( $order_id, self::ABANDONED_LOCK );
-			}
+			PaymentLock::release( $order_id, self::ABANDONED_LOCK );
 		}
 	}
 
