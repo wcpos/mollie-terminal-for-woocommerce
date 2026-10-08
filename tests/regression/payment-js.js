@@ -313,7 +313,21 @@ async function flush() {
 	await resolveNext({ status: 'paid', redirect_url: thankYouUrl });
 	assert.strictEqual(paidResumePanel.mtfwcCompleted, true, 'the resumed panel completes the order once the poll reports it paid');
 
-	// A failed cancel request must surface an error, not silently reset.
+	// A refreshed panel for a paid_unverified attempt resumes; when the poll still
+	// fails verification the panel reports a failed payment and stops polling.
+	const unverifiedResumePanel = makePanel('8888', { 'data-resume': '1' });
+	panels.push(unverifiedResumePanel);
+	jqueryHandlers.updated_checkout();
+	await resolveNext({ terminals: [{ id: 'term_default', label: 'Back office', status: 'active' }], default_terminal_id: 'term_default' });
+	await fireTimers();
+	assert.strictEqual(lastAction(), 'mtfwc_poll_payment', 'the resumed paid_unverified panel polls on load');
+	await resolveNext({ status: 'verification_failed', payment_status: 'paid', errors: ['amount mismatch'] });
+	assert(!unverifiedResumePanel.mtfwcPoll, 'a verification failure stops the poll loop');
+	assert(!unverifiedResumePanel.mtfwcCompleted, 'a verification failure never completes the order');
+	assert(/failed/i.test(unverifiedResumePanel.querySelector('.mtfwc-payment-status').textContent), 'a verification failure is reported as a failed payment');
+
+	// A failed cancel request must surface an error and keep the attempt live:
+	// the server still holds it as current, so Cancel stays and polling goes on.
 	const cancelPanel = makePanel('654');
 	panels.push(cancelPanel);
 	jqueryHandlers.updated_checkout();
@@ -327,7 +341,19 @@ async function flush() {
 	await resolveError();
 	assert(/failed/i.test(cancelPanel.querySelector('.mtfwc-payment-status').textContent), 'a failed cancel should show an error status');
 	assert.strictEqual(cancelAction.disabled, false, 'button re-enables after a failed cancel');
-	assert.strictEqual(cancelAction.getAttribute('data-mtfwc-mode'), 'start', 'button returns to start mode after a failed cancel');
+	assert.strictEqual(cancelAction.getAttribute('data-mtfwc-mode'), 'cancel', 'button stays in cancel mode after a failed cancel');
+	assert(cancelPanel.mtfwcPoll, 'polling resumes after a failed cancel');
+	// #34: the server refused to set the payment aside (the order was busy) and
+	// said so; the cashier sees that reason and can cancel again.
+	cancelAction.click();
+	assert.strictEqual(lastAction(), 'mtfwc_cancel_payment', 'cancel can be retried after a failure');
+	await resolveError('Another Mollie Terminal operation is finishing on this order. Try cancelling again in a moment.');
+	assert(/cancelling again/i.test(cancelPanel.querySelector('.mtfwc-payment-status').textContent), 'a refused cancel shows the server\'s retry message');
+	assert.strictEqual(cancelAction.getAttribute('data-mtfwc-mode'), 'cancel', 'a refused cancel keeps the cancel button');
+	assert(cancelPanel.mtfwcPoll, 'a refused cancel keeps polling');
+	cancelAction.click();
+	await resolveNext({ status: 'canceled' });
+	assert.strictEqual(cancelAction.getAttribute('data-mtfwc-mode'), 'start', 'the retried cancel returns the panel to start mode');
 
 	// Abandon path: when the server cannot cancel (terminal off) it returns
 	// "abandoned"; the panel frees up so a fresh Start works.
@@ -430,6 +456,59 @@ async function flush() {
 	assert.strictEqual(lastAction(), 'mtfwc_poll_payment', 'the re-selected panel polls');
 	await resolveNext({ status: 'paid', redirect_url: raceUrl });
 	assert.strictEqual(switchPanel.mtfwcCompleted, true, 'the order completes once the server reports it paid');
+
+	// #35: the cashier switches to cash while a Cancel click is in flight (the
+	// switch handler skips a panel that is not polling, so it sends no second
+	// cancel); when that cancel fails, the payment is still live, so the panel
+	// goes back on this gateway and polls again.
+	const liveSwitchPanel = makePanel('5555');
+	panels.push(liveSwitchPanel);
+	jqueryHandlers.updated_checkout();
+	await resolveNext({ terminals: [{ id: 'term_default', label: 'Back office', status: 'active' }], default_terminal_id: 'term_default' });
+	const liveSwitchAction = liveSwitchPanel.querySelector('.mtfwc-primary-action');
+	liveSwitchAction.click();
+	await resolveNext({ status: 'created' });
+	liveSwitchAction.click(); // Cancel
+	const fetchesAtCancel = fetchCalls.length;
+	const clicksBeforeFailure = gatewayRadio.clicks;
+	checkedPaymentMethod = 'cod';
+	firePaymentMethodChange();
+	await flush();
+	assert.strictEqual(fetchCalls.length, fetchesAtCancel, 'a switch while the cancel is in flight sends no second cancel');
+	await resolveError('Another Mollie Terminal operation is finishing on this order. Try cancelling again in a moment.');
+	assert.strictEqual(checkedPaymentMethod, 'mollie_terminal_for_woocommerce', 'a failed Cancel click puts the order back on the Mollie gateway');
+	assert.strictEqual(gatewayRadio.clicks, clicksBeforeFailure + 1, 'the gateway radio is clicked once');
+	assert(liveSwitchPanel.mtfwcPoll, 'the panel polls again after the failed cancel');
+	assert.strictEqual(liveSwitchAction.getAttribute('data-mtfwc-mode'), 'cancel', 'Cancel stays the action');
+	assert.strictEqual(fetchCalls.length, fetchesAtCancel, 'reselecting the gateway sends no cancel');
+	await fireTimers();
+	assert.strictEqual(lastAction(), 'mtfwc_poll_payment', 'the panel resumes polling');
+	await resolveNext({ status: 'canceled' });
+	assert(!liveSwitchPanel.mtfwcPoll, 'the resumed poll stops once the payment is final');
+
+	// The same with the poll-timeout auto-cancel: a switch during it, then a failed cancel.
+	const timeoutSwitchPanel = makePanel('6666');
+	panels.push(timeoutSwitchPanel);
+	jqueryHandlers.updated_checkout();
+	await resolveNext({ terminals: [{ id: 'term_default', label: 'Back office', status: 'active' }], default_terminal_id: 'term_default' });
+	timeoutSwitchPanel.querySelector('.mtfwc-primary-action').click();
+	await resolveNext({ status: 'created' });
+	timeoutSwitchPanel.mtfwcPoll.deadline = 0;
+	await fireTimers();
+	assert.strictEqual(lastAction(), 'mtfwc_cancel_payment', 'the timed-out poll auto-cancels');
+	const fetchesAtTimeoutCancel = fetchCalls.length;
+	const clicksBeforeTimeoutFailure = gatewayRadio.clicks;
+	checkedPaymentMethod = 'cod';
+	firePaymentMethodChange();
+	await flush();
+	assert.strictEqual(fetchCalls.length, fetchesAtTimeoutCancel, 'a switch during the timeout cancel sends no second cancel');
+	await resolveError();
+	assert.strictEqual(checkedPaymentMethod, 'mollie_terminal_for_woocommerce', 'a failed timeout cancel puts the order back on the Mollie gateway');
+	assert.strictEqual(gatewayRadio.clicks, clicksBeforeTimeoutFailure + 1, 'the gateway radio is clicked once after the timeout cancel fails');
+	assert(timeoutSwitchPanel.mtfwcPoll, 'the panel polls again after the failed timeout cancel');
+	assert.strictEqual(fetchCalls.length, fetchesAtTimeoutCancel, 'reselecting after the timeout cancel sends no cancel');
+	await fireTimers();
+	await resolveNext({ status: 'canceled' });
 
 	// #28 review: Start reuses an attempt Mollie reports paid while another request
 	// completes the order. Terminal and QR alike say "finishing", never "waiting"

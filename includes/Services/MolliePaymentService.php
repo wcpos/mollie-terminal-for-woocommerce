@@ -4,6 +4,7 @@ namespace WCPOS\WooCommercePOS\MollieTerminal\Services;
 use RuntimeException;
 use WCPOS\WooCommercePOS\MollieTerminal\Logger;
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentAttempt;
+use WCPOS\WooCommercePOS\MollieTerminal\PaymentCleanup;
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentLock;
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentReconciler;
 use WCPOS\WooCommercePOS\MollieTerminal\Settings;
@@ -100,7 +101,7 @@ class MolliePaymentService {
 		return $result;
 	}
 
-	public function poll_order( $order ): array {
+	public function poll_order( $order, string $source = 'poll' ): array {
 		$current = PaymentAttempt::current( $order );
 		if ( ! $current ) {
 			Logger::log( 'Mollie terminal poll skipped because no payment attempt exists.', array( 'order_id' => (int) $order->get_id() ), 'info' );
@@ -110,14 +111,16 @@ class MolliePaymentService {
 		// A completion that died after saving the attempt as paid, before
 		// payment_complete(), leaves a paid attempt on an unpaid order: ask Mollie
 		// again and reconcile, so the poll completes it rather than echo "paid".
-		if ( PaymentAttempt::is_non_final( $status ) || ( 'paid' === $status && ! $order->is_paid() ) ) {
+		// A paid attempt that failed verification is verified again the same way.
+		if ( PaymentAttempt::is_non_final( $status ) || ( PaymentAttempt::reported_paid( $status ) && ! $order->is_paid() ) ) {
 			Logger::log( 'Polling Mollie terminal payment.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'] ?? '' ), 'info' );
 			$include = PaymentAttempt::is_qr_method( $current['method'] ) ? array( 'details.qrCode' ) : array();
 			$payment = $this->client->get_payment( $current['payment_id'], $include );
-			$result = $this->reconciler->reconcile( $order, $payment, 'poll' );
+			$result = $this->reconciler->reconcile( $order, $payment, $source );
 			$result = $this->with_qr_code( $result, $payment );
 		} else {
-			$result = array( 'status' => $status );
+			// The panel knows verification_failed, not the stored paid_unverified.
+			$result = array( 'status' => PaymentAttempt::STATUS_PAID_UNVERIFIED === $status ? 'verification_failed' : $status );
 		}
 		Logger::log( 'Mollie terminal poll completed.', array( 'order_id' => (int) $order->get_id(), 'status' => $result['status'] ?? '' ), 'info' );
 		$created = strtotime( $current['created_at'] ?? '' );
@@ -127,12 +130,30 @@ class MolliePaymentService {
 		return $result;
 	}
 
-	public function cancel_order_payment( $order ): array {
-		return PaymentLock::with_lock( (int) $order->get_id(), 'cancel_payment', function () use ( $order ) {
+	/**
+	 * @param string $only_payment_id Set by the cleanup retry: the order is re-read
+	 *                                under the lock and the cancel proceeds only if
+	 *                                the order is still non-payable and this is still
+	 *                                its current payment, so a payment the cashier
+	 *                                resumed or replaced in the meantime is not canceled.
+	 */
+	public function cancel_order_payment( $order, string $only_payment_id = '' ): array {
+		return PaymentLock::with_lock( (int) $order->get_id(), 'cancel_payment', function () use ( $order, $only_payment_id ) {
+			if ( '' !== $only_payment_id ) {
+				$order = PaymentReconciler::reload_order( $order );
+				if ( ! in_array( (string) $order->get_status(), PaymentCleanup::NON_PAYABLE, true ) ) {
+					Logger::log( 'Mollie terminal cancel skipped: the order is payable again.', array( 'order_id' => (int) $order->get_id(), 'status' => (string) $order->get_status() ), 'info' );
+					return array( 'status' => 'skipped' );
+				}
+			}
 			$current = PaymentAttempt::current( $order );
 			if ( ! $current ) {
 				Logger::log( 'Mollie terminal cancel skipped because no payment attempt exists.', array( 'order_id' => (int) $order->get_id() ), 'info' );
 				return array( 'status' => 'idle' );
+			}
+			if ( '' !== $only_payment_id && (string) ( $current['payment_id'] ?? '' ) !== $only_payment_id ) {
+				Logger::log( 'Mollie terminal cancel skipped: the order now has a different current payment.', array( 'order_id' => (int) $order->get_id(), 'expected' => $only_payment_id, 'current' => $current['payment_id'] ?? '' ), 'info' );
+				return array( 'status' => 'skipped' );
 			}
 			Logger::log( 'Canceling Mollie terminal payment.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'] ?? '' ), 'info' );
 			$payment = $this->client->get_payment( $current['payment_id'] );
@@ -157,7 +178,13 @@ class MolliePaymentService {
 			// locally so the cashier regains control and can start a fresh payment
 			// or choose another method; the webhook and the stale-payment sweep
 			// reconcile the lingering Mollie payment.
-			PaymentAttempt::abandon_current( $order );
+			if ( ! PaymentAttempt::abandon_current( $order ) ) {
+				// The abandoned list is busy (another request is finishing an earlier
+				// set-aside payment on this order). Keep the current pointer so the
+				// payment stays visible to the sweep; the cashier cancels again.
+				Logger::log( 'Mollie terminal payment not abandoned: the order is busy.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'] ?? '' ), 'warning' );
+				throw new RuntimeException( __( 'Another Mollie Terminal operation is finishing on this order. Try cancelling again in a moment.', 'mollie-terminal-for-woocommerce' ) );
+			}
 			$order->add_order_note( __( 'Mollie Terminal: payment could not be canceled (terminal unresponsive); attempt abandoned locally and left for automatic cleanup.', 'mollie-terminal-for-woocommerce' ) );
 			$order->save();
 			Logger::log( 'Mollie terminal payment abandoned locally; still open at Mollie.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'] ?? '', 'status' => $payment['status'] ?? '' ), 'warning' );

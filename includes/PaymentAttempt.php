@@ -10,6 +10,16 @@ class PaymentAttempt {
 	public const META_CURRENT_PAYMENT_CREATED_AT = '_mtfwc_current_payment_created_at';
 	public const META_ATTEMPTS = '_mtfwc_payment_attempts';
 	public const META_ABANDONED_PAYMENT_IDS = '_mtfwc_abandoned_payment_ids';
+	// Stored (never a Mollie status): Mollie reported the payment paid, but it did
+	// not verify against this order. Final, so the stale-payment sweep leaves it
+	// alone; a cashier's poll, refresh, Start or cancel asks Mollie and verifies again.
+	public const STATUS_PAID_UNVERIFIED = 'paid_unverified';
+	// Serializes the abandoned list's read-modify-write: completion and cancel hold different locks.
+	private const ABANDONED_LOCK = 'abandoned_list';
+	// One order reload plus one meta save; a dead holder blocks the list no longer than this.
+	private const ABANDONED_LOCK_TTL = 5;
+	// Waits (ms) between claims while another request holds the list: ~1.5 s, short enough for AJAX.
+	private const ABANDONED_LOCK_WAITS_MS = array( 100, 200, 400, 800 );
 
 	public static function current( $order ): ?array {
 		$payment_id = $order->get_meta( self::META_CURRENT_PAYMENT_ID );
@@ -70,9 +80,10 @@ class PaymentAttempt {
 		return $attempt;
 	}
 
-	public static function update_status( $order, array $payment ): void {
+	/** $status overrides the Mollie status that is stored (STATUS_PAID_UNVERIFIED). */
+	public static function update_status( $order, array $payment, string $status = '' ): void {
 		$payment_id = self::payment_id( $payment );
-		$status = self::payment_status( $payment );
+		$status = '' !== $status ? $status : self::payment_status( $payment );
 		// Only the current attempt owns the current-status pointer. A reconcile of
 		// an abandoned payment (webhook or stale sweep) must not stamp its status
 		// onto whatever attempt the cashier is running now.
@@ -101,11 +112,27 @@ class PaymentAttempt {
 	 * lingering Mollie payment is reconciled later by the webhook (looked up via
 	 * metadata order_id) or canceled by the stale-payment sweep, which finds it
 	 * through META_ABANDONED_PAYMENT_IDS now that the current pointer is gone.
+	 *
+	 * Returns false, with the order untouched, when the payment is still open
+	 * and could not be parked because the abandoned list is busy: the current
+	 * pointer then keeps the payment visible to the sweep and the caller tells
+	 * the cashier to try again, instead of clearing the pointer on a write the
+	 * busy request could overwrite.
 	 */
-	public static function abandon_current( $order ): void {
+	public static function abandon_current( $order ): bool {
 		$payment_id = (string) $order->get_meta( self::META_CURRENT_PAYMENT_ID );
 		if ( '' !== $payment_id ) {
 			$status = (string) $order->get_meta( self::META_CURRENT_PAYMENT_STATUS );
+			// The payment is (as far as we know) still open at Mollie. Deleting the
+			// current pointer would hide it from the stale-payment sweep, which
+			// queries orders by meta key, so park the ID where the sweep looks
+			// before the pointer goes: a crash in between leaves it on both.
+			if ( self::is_non_final( $status ) ) {
+				$parked = self::change_abandoned( $order, function ( array $ids ) use ( $payment_id ) {
+					return in_array( $payment_id, $ids, true ) ? $ids : array_merge( $ids, array( $payment_id ) );
+				} );
+				if ( ! $parked ) { return false; }
+			}
 			$history = self::history( $order );
 			foreach ( $history as &$attempt ) {
 				if ( ( $attempt['payment_id'] ?? '' ) === $payment_id && self::is_non_final( (string) ( $attempt['status'] ?? '' ) ) ) {
@@ -115,16 +142,6 @@ class PaymentAttempt {
 			}
 			unset( $attempt );
 			$order->update_meta_data( self::META_ATTEMPTS, $history );
-			// The payment is (as far as we know) still open at Mollie. Deleting the
-			// current pointer would hide it from the stale-payment sweep, which
-			// queries orders by meta key, so park the ID where the sweep looks.
-			if ( self::is_non_final( $status ) ) {
-				$abandoned = self::abandoned( $order );
-				if ( ! in_array( $payment_id, $abandoned, true ) ) {
-					$abandoned[] = $payment_id;
-					$order->update_meta_data( self::META_ABANDONED_PAYMENT_IDS, $abandoned );
-				}
-			}
 		}
 		$order->delete_meta_data( self::META_CURRENT_ATTEMPT_ID );
 		$order->delete_meta_data( self::META_CURRENT_PAYMENT_ID );
@@ -133,6 +150,7 @@ class PaymentAttempt {
 		$order->delete_meta_data( self::META_CURRENT_PAYMENT_STATUS );
 		$order->delete_meta_data( self::META_CURRENT_PAYMENT_CREATED_AT );
 		$order->save();
+		return true;
 	}
 
 	public static function history( $order ): array {
@@ -161,23 +179,68 @@ class PaymentAttempt {
 
 	/** Stop chasing an abandoned payment: it reached a final state at Mollie. */
 	public static function forget_abandoned( $order, string $payment_id ): void {
-		$abandoned = self::abandoned( $order );
-		if ( ! in_array( $payment_id, $abandoned, true ) ) { return; }
-		$remaining = array_values( array_diff( $abandoned, array( $payment_id ) ) );
-		// Delete rather than store an empty array: the sweep query matches on the
-		// meta key existing, not on its contents.
-		if ( empty( $remaining ) ) {
-			$order->delete_meta_data( self::META_ABANDONED_PAYMENT_IDS );
-		} else {
-			$order->update_meta_data( self::META_ABANDONED_PAYMENT_IDS, $remaining );
+		// Not listed when this request loaded the order: nothing to do. Listed
+		// since by another request: it stays, and the sweep drops it next run.
+		if ( ! in_array( $payment_id, self::abandoned( $order ), true ) ) { return; }
+		// A removal that finds the list busy gives up: the leftover entry costs
+		// one lookup on the next sweep, which forgets it then.
+		self::change_abandoned( $order, function ( array $ids ) use ( $payment_id ) {
+			return array_values( array_diff( $ids, array( $payment_id ) ) );
+		} );
+	}
+
+	/**
+	 * Read-modify-write the abandoned list as stored now, not as $order loaded it.
+	 * The cancel path adds to it and reconciliation removes from it in different
+	 * requests under different locks, and a completion can run for seconds
+	 * (stock, emails): writing back a list read earlier would drop the other
+	 * request's entry and leave a payment open at Mollie untracked (#32). The
+	 * write goes through the re-read copy only, so $order never writes this key.
+	 *
+	 * Re-read, compute and save run under a per-order ABANDONED_LOCK, so two
+	 * requests cannot both read the same list and the later save drop the
+	 * earlier one's change (#33). Returns false without writing when the lock
+	 * cannot be claimed within ABANDONED_LOCK_WAITS_MS or the claim hits a
+	 * database error; the list is never written outside the lock, and each
+	 * caller decides what its unwritten change means.
+	 */
+	private static function change_abandoned( $order, callable $change ): bool {
+		$order_id = (int) $order->get_id();
+		$claim = PaymentLock::claim( $order_id, self::ABANDONED_LOCK, self::ABANDONED_LOCK_TTL );
+		foreach ( self::ABANDONED_LOCK_WAITS_MS as $wait_ms ) {
+			if ( PaymentLock::HELD !== $claim ) { break; }
+			usleep( $wait_ms * 1000 );
+			$claim = PaymentLock::claim( $order_id, self::ABANDONED_LOCK, self::ABANDONED_LOCK_TTL );
 		}
-		$order->save();
+		if ( PaymentLock::ACQUIRED !== $claim ) {
+			Logger::log( 'Mollie Terminal abandoned-payment list is busy; change not written.', array( 'order_id' => $order_id, 'claim' => $claim ), 'warning' );
+			return false;
+		}
+		try {
+			$fresh = PaymentReconciler::reload_order( $order );
+			$before = self::abandoned( $fresh );
+			$after = $change( $before );
+			if ( $after === $before ) { return true; }
+			// Delete rather than store an empty array: the sweep query matches on the
+			// meta key existing, not on its contents.
+			if ( empty( $after ) ) {
+				$fresh->delete_meta_data( self::META_ABANDONED_PAYMENT_IDS );
+			} else {
+				$fresh->update_meta_data( self::META_ABANDONED_PAYMENT_IDS, $after );
+			}
+			$fresh->save();
+			return true;
+		} finally {
+			PaymentLock::release( $order_id, self::ABANDONED_LOCK );
+		}
 	}
 
 	public static function payment_id( array $payment ): string { return (string) ( $payment['id'] ?? '' ); }
 	public static function payment_status( array $payment ): string { return (string) ( $payment['status'] ?? 'unknown' ); }
 	public static function is_final_unpaid( string $status ): bool { return in_array( $status, array( 'failed', 'canceled', 'expired' ), true ); }
 	public static function is_final( string $status ): bool { return 'paid' === $status || self::is_final_unpaid( $status ); }
+	/** Stored attempt status for a payment Mollie reported paid, verified or not. */
+	public static function reported_paid( string $status ): bool { return in_array( $status, array( 'paid', self::STATUS_PAID_UNVERIFIED ), true ); }
 	public static function is_non_final( string $status ): bool { return in_array( $status, array( 'open', 'pending', 'authorized', '' ), true ); }
 	public static function is_qr_method( string $method ): bool { return in_array( $method, array( 'ideal', 'bancontact' ), true ); }
 }

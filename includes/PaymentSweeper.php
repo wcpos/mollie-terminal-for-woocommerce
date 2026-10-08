@@ -20,6 +20,14 @@ use WCPOS\WooCommercePOS\MollieTerminal\Services\MolliePaymentService;
 class PaymentSweeper {
 	public const CRON_HOOK = 'mtfwc_sweep_stale_payments';
 	public const SCHEDULE = 'mtfwc_ten_minutes';
+	// Orders whose attempt the sweep skips (paid_unverified, canceled, ...) keep
+	// their meta and stay the oldest matches, so each query reads past them in
+	// batches, fetching at most this many orders per meta key per run.
+	private const MAX_EXAMINED_PER_QUERY = 200;
+	// Smallest scan batch, independent of the mtfwc_stale_payment_batch action
+	// budget: a site lowering that budget to cut work must not multiply queries
+	// (at most 200 / 25 = 8 per list per run).
+	private const MIN_SCAN_PAGE = 25;
 
 	private $service;
 
@@ -62,37 +70,66 @@ class PaymentSweeper {
 
 	public function sweep(): void {
 		if ( ! function_exists( 'wc_get_orders' ) ) { return; }
-		$limit = (int) apply_filters( 'mtfwc_stale_payment_batch', 25 );
-		$orders = array();
+		$limit = max( 1, (int) apply_filters( 'mtfwc_stale_payment_batch', 25 ) );
+		$page = max( self::MIN_SCAN_PAGE, $limit );
 		// Orders whose current attempt may have gone stale in the browser.
-		foreach ( $this->find_orders( array( 'pending', 'failed' ), PaymentAttempt::META_CURRENT_PAYMENT_ID, $limit ) as $order ) {
-			$orders[ (int) $order->get_id() ] = $order;
-		}
+		$current = $this->find_orders( array( 'pending', 'failed' ), PaymentAttempt::META_CURRENT_PAYMENT_ID, $page );
 		// Orders holding a payment that was abandoned locally while still open at
 		// Mollie. Their current-attempt pointer is gone, so the query above cannot
 		// see them, and their status is irrelevant: the order may since have been
 		// paid in cash or cancelled while the payment stayed open.
-		foreach ( $this->find_orders( 'any', PaymentAttempt::META_ABANDONED_PAYMENT_IDS, $limit ) as $order ) {
-			$orders[ (int) $order->get_id() ] = $order;
-		}
-		if ( empty( $orders ) ) { return; }
-		$swept = 0;
-		foreach ( $orders as $order ) {
-			if ( $this->sweep_order( $order ) ) { $swept++; }
-		}
+		$abandoned = $this->find_orders( 'any', PaymentAttempt::META_ABANDONED_PAYMENT_IDS, $page );
+		// Each list acts on (makes Mollie calls for) at most one batch per run, as
+		// when each query fetched a single batch, so neither list starves the other.
+		// An order on both lists that the first batch already swept is skipped by
+		// the second; one past the first batch's budget is still swept by the second.
+		$visited = array();
+		$swept = $this->sweep_batch( $current, $limit, $visited );
+		$swept += $this->sweep_batch( array_diff_key( $abandoned, $visited ), $limit, $visited );
 		if ( $swept > 0 ) {
-			Logger::log( 'Mollie terminal stale-payment sweep finished.', array( 'canceled' => $swept, 'scanned' => count( $orders ) ), 'info' );
+			Logger::log( 'Mollie terminal stale-payment sweep finished.', array( 'canceled' => $swept, 'scanned' => count( $current ) + count( $abandoned ) ), 'info' );
 		}
 	}
 
+	/** Sweeps orders until $budget of them were acted on; adds every order it swept to $visited. */
+	private function sweep_batch( array $orders, int $budget, array &$visited ): int {
+		$swept = 0;
+		foreach ( $orders as $id => $order ) {
+			if ( $swept >= $budget ) { break; }
+			$visited[ $id ] = true;
+			if ( $this->sweep_order( $order ) ) { $swept++; }
+		}
+		return $swept;
+	}
+
+	/**
+	 * Oldest matching orders keyed by ID, fetched in batches of $page until
+	 * MAX_EXAMINED_PER_QUERY orders are fetched. All batches are read before any
+	 * order is swept, so orders leaving the set (completed, cancelled) cannot
+	 * shift a later batch past an unseen order.
+	 *
+	 * @param string|array $status
+	 */
+	private function find_orders( $status, string $meta_key, int $page ): array {
+		$found = array();
+		for ( $offset = 0; $offset < self::MAX_EXAMINED_PER_QUERY; $offset += $size ) {
+			$size = min( $page, self::MAX_EXAMINED_PER_QUERY - $offset );
+			$batch = $this->find_orders_page( $status, $meta_key, $size, $offset );
+			foreach ( $batch as $order ) { $found[ (int) $order->get_id() ] = $order; }
+			if ( count( $batch ) < $size ) { break; }
+		}
+		return $found;
+	}
+
 	/** @param string|array $status */
-	private function find_orders( $status, string $meta_key, int $limit ): array {
+	private function find_orders_page( $status, string $meta_key, int $limit, int $offset ): array {
 		$orders = wc_get_orders(
 			array(
 				// Refunds are order objects too and come back by default. They never
 				// carry the attempt meta and lack the WC_Order methods the sweep calls.
 				'type'         => 'shop_order',
 				'limit'        => $limit,
+				'offset'       => $offset,
 				'status'       => $status,
 				'orderby'      => 'date',
 				'order'        => 'ASC',
@@ -124,7 +161,20 @@ class PaymentSweeper {
 		if ( $order->is_paid() ) { return $swept; }
 		$current = PaymentAttempt::current( $order );
 		if ( ! $current || empty( $current['payment_id'] ) ) { return $swept; }
-		if ( ! PaymentAttempt::is_non_final( (string) ( $current['status'] ?? '' ) ) ) { return $swept; }
+		$status = (string) ( $current['status'] ?? '' );
+		if ( 'paid' === $status ) {
+			// A completion died after storing the verified paid attempt, before
+			// payment_complete(). The poll path asks Mollie again and completes it under
+			// the completion claim, once. A paid_unverified attempt is not 'paid': left alone.
+			Logger::log( 'Recovering a paid Mollie terminal payment whose order was not completed.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'] ), 'warning' );
+			try {
+				$this->service()->poll_order( $order, 'stale_sweep' );
+			} catch ( Exception $e ) {
+				Logger::log( 'Paid-payment recovery failed for order: ' . $e->getMessage(), array( 'order_id' => (int) $order->get_id() ), 'error' );
+			}
+			return true;
+		}
+		if ( ! PaymentAttempt::is_non_final( $status ) ) { return $swept; }
 		$created = strtotime( (string) ( $current['created_at'] ?? '' ) );
 		if ( ! $created || ( time() - $created ) < self::stale_threshold() ) { return $swept; }
 		Logger::log( 'Sweeping stale open Mollie terminal payment.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'] ), 'info' );

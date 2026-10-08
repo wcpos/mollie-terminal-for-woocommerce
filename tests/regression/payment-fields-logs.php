@@ -108,6 +108,11 @@ $GLOBALS['mtfwc_test_order']->meta[ PaymentAttempt::META_CURRENT_PAYMENT_STATUS 
 $html = render_fields();
 expect( false !== strpos( $html, 'data-resume="1"' ), 'an unpaid order with an attempt stored as paid should resume on load' );
 expect( false !== strpos( $html, 'data-mtfwc-mode="cancel"' ), 'a panel resuming a paid attempt should render the button in cancel mode' );
+// A paid payment that failed verification resumes too, as it did when it was
+// stored as paid: the poll verifies it again and the panel reports the outcome.
+$GLOBALS['mtfwc_test_order']->meta[ PaymentAttempt::META_CURRENT_PAYMENT_STATUS ] = PaymentAttempt::STATUS_PAID_UNVERIFIED;
+$html = render_fields();
+expect( false !== strpos( $html, 'data-resume="1"' ), 'an unpaid order with a paid_unverified attempt should resume on load' );
 // A final unpaid attempt stays idle.
 $GLOBALS['mtfwc_test_order']->meta[ PaymentAttempt::META_CURRENT_PAYMENT_STATUS ] = 'canceled';
 $html = render_fields();
