@@ -129,12 +129,21 @@ class MolliePaymentService {
 		return $result;
 	}
 
-	public function cancel_order_payment( $order ): array {
-		return PaymentLock::with_lock( (int) $order->get_id(), 'cancel_payment', function () use ( $order ) {
+	/**
+	 * @param string $only_payment_id When given, cancel only if this is still the
+	 *                                current payment (checked under the lock): the
+	 *                                cleanup retry must never cancel a newer attempt.
+	 */
+	public function cancel_order_payment( $order, string $only_payment_id = '' ): array {
+		return PaymentLock::with_lock( (int) $order->get_id(), 'cancel_payment', function () use ( $order, $only_payment_id ) {
 			$current = PaymentAttempt::current( $order );
 			if ( ! $current ) {
 				Logger::log( 'Mollie terminal cancel skipped because no payment attempt exists.', array( 'order_id' => (int) $order->get_id() ), 'info' );
 				return array( 'status' => 'idle' );
+			}
+			if ( '' !== $only_payment_id && (string) ( $current['payment_id'] ?? '' ) !== $only_payment_id ) {
+				Logger::log( 'Mollie terminal cancel skipped: the order now has a different current payment.', array( 'order_id' => (int) $order->get_id(), 'expected' => $only_payment_id, 'current' => $current['payment_id'] ?? '' ), 'info' );
+				return array( 'status' => 'skipped' );
 			}
 			Logger::log( 'Canceling Mollie terminal payment.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'] ?? '' ), 'info' );
 			$payment = $this->client->get_payment( $current['payment_id'] );

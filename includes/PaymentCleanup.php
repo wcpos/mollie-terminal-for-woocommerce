@@ -24,6 +24,8 @@ class PaymentCleanup {
 	// Four retries (about fifteen minutes) outlast a busy order or a short Mollie
 	// outage; a payment still open after that gets an error log and an order note.
 	private const RETRY_LIMIT = 4;
+	// Order statuses under which an open terminal payment must not stay open.
+	private const NON_PAYABLE = array( 'processing', 'completed', 'cancelled', 'failed' );
 
 	private $service;
 
@@ -49,7 +51,7 @@ class PaymentCleanup {
 	}
 
 	public function maybe_cancel_abandoned_payment( $order_id, $from_status, $to_status, $order = null ): void {
-		if ( ! in_array( (string) $to_status, array( 'processing', 'completed', 'cancelled', 'failed' ), true ) ) {
+		if ( ! in_array( (string) $to_status, self::NON_PAYABLE, true ) ) {
 			return;
 		}
 		$order = $order ?: wc_get_order( $order_id );
@@ -69,12 +71,14 @@ class PaymentCleanup {
 	 * abandoned list was busy, or Mollie did not answer). This hook is one-shot
 	 * and the stale-payment sweep only scans payable orders for current
 	 * attempts, so without this nothing would try again. Runs only while the
-	 * same payment is still the order's open current attempt: a cashier who
-	 * reopened the order and started a new payment must not have it canceled.
+	 * order is still non-payable and the same payment is still its open current
+	 * attempt: a cashier who reopened the order collects that same payment
+	 * again, and one who started a new payment must not have it canceled. The
+	 * service checks the id once more under its own lock.
 	 */
 	public function retry_cancel( $order_id, $payment_id = '', $attempt = 1 ): void {
 		$order = function_exists( 'wc_get_order' ) ? wc_get_order( (int) $order_id ) : false;
-		if ( ! $order ) { return; }
+		if ( ! $order || ! in_array( (string) $order->get_status(), self::NON_PAYABLE, true ) ) { return; }
 		$current = PaymentAttempt::current( $order );
 		if ( ! $current || (string) ( $current['payment_id'] ?? '' ) !== (string) $payment_id || ! PaymentAttempt::is_non_final( (string) ( $current['status'] ?? '' ) ) ) {
 			return;
@@ -84,7 +88,7 @@ class PaymentCleanup {
 
 	private function cancel_open_payment( $order, string $payment_id, string $order_status, int $attempt ): void {
 		try {
-			$result = $this->service()->cancel_order_payment( $order );
+			$result = $this->service()->cancel_order_payment( $order, $payment_id );
 			$status   = is_array( $result ) ? (string) ( $result['status'] ?? '' ) : '';
 			$order->add_order_note( sprintf( 'Mollie Terminal: open payment auto-cancel after order became %s (result: %s).', $order_status, $status ) );
 			$order->save();
@@ -104,7 +108,12 @@ class PaymentCleanup {
 		}
 		$args = array( $order_id, $payment_id, $attempt );
 		if ( wp_next_scheduled( self::RETRY_HOOK, $args ) ) { return; }
-		wp_schedule_single_event( time() + ( self::RETRY_DELAY << ( $attempt - 1 ) ), self::RETRY_HOOK, $args );
+		if ( true !== wp_schedule_single_event( time() + ( self::RETRY_DELAY << ( $attempt - 1 ) ), self::RETRY_HOOK, $args ) ) {
+			// WordPress could not store the event: no retry will run, so say so
+			// on the order now rather than after a retry that never comes.
+			$this->schedule_retry( $order, $payment_id, self::RETRY_LIMIT + 1 );
+			return;
+		}
 		Logger::log( 'Automatic cancel of an open Mollie terminal payment will be retried.', array( 'order_id' => $order_id, 'payment_id' => $payment_id, 'attempt' => $attempt ), 'warning' );
 	}
 }

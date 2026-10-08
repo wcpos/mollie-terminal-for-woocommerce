@@ -9,8 +9,9 @@ function add_action( $hook, $callback, $priority = 10, $args = 1 ) { global $act
 function __( $text, $domain = null ) { return $text; }
 function wp_json_encode( $value ) { return json_encode( $value ); }
 $scheduled = array();
+$schedule_result = true;
 function wp_next_scheduled( $hook, $args = array() ) { global $scheduled; foreach ( $scheduled as $event ) { if ( $event['hook'] === $hook && $event['args'] === $args ) { return $event['at']; } } return false; }
-function wp_schedule_single_event( $at, $hook, $args = array() ) { global $scheduled; $scheduled[] = array( 'at' => $at, 'hook' => $hook, 'args' => $args ); return true; }
+function wp_schedule_single_event( $at, $hook, $args = array() ) { global $scheduled, $schedule_result; if ( true !== $schedule_result ) { return $schedule_result; } $scheduled[] = array( 'at' => $at, 'hook' => $hook, 'args' => $args ); return true; }
 function wc_get_order( $id ) { return $GLOBALS['mtfwc_cleanup_order'] ?? false; }
 class NoopWooLoggerForCleanup { public function log( $level, $message, $context = array() ) {} }
 function wc_get_logger() { return new NoopWooLoggerForCleanup(); }
@@ -51,9 +52,11 @@ class FakeOrderForCleanup {
 class FakeCancelService extends MolliePaymentService {
 	public $cancel_calls = 0;
 	public $fail = false;
+	public $only_ids = array();
 	public function __construct() {}
-	public function cancel_order_payment( $order ): array {
+	public function cancel_order_payment( $order, string $only_payment_id = '' ): array {
 		$this->cancel_calls++;
+		$this->only_ids[] = $only_payment_id;
 		if ( $this->fail ) { throw new RuntimeException( 'Another Mollie Terminal operation is finishing on this order.' ); }
 		return array( 'status' => 'canceled' );
 	}
@@ -104,10 +107,11 @@ expect( isset( $actions[ PaymentCleanup::RETRY_HOOK ] ), 'cleanup should hook it
 $service->fail = true;
 $order = make_order( 'open' );
 $GLOBALS['mtfwc_cleanup_order'] = $order;
+$before = time();
 $cleanup->maybe_cancel_abandoned_payment( 321, 'pending', 'processing', $order );
 expect( 3 === $service->cancel_calls && array() === $order->notes, 'a failed cancel leaves no result note' );
 expect( 1 === count( $scheduled ) && PaymentCleanup::RETRY_HOOK === $scheduled[0]['hook'] && array( 321, 'tr_cleanup_test', 1 ) === $scheduled[0]['args'], 'a failed cancel schedules one retry for that payment (scheduled: ' . json_encode( $scheduled ) . ')' );
-expect( $scheduled[0]['at'] >= time() + 60 && $scheduled[0]['at'] <= time() + 61, 'the first retry runs about a minute later' );
+expect( $scheduled[0]['at'] >= $before + 60 && $scheduled[0]['at'] <= time() + 60, 'the first retry runs about a minute later' );
 // The same failure again does not queue a duplicate.
 $cleanup->maybe_cancel_abandoned_payment( 321, 'pending', 'processing', $order );
 expect( 1 === count( $scheduled ), 'a repeated failure must not queue a second identical retry' );
@@ -115,6 +119,14 @@ expect( 1 === count( $scheduled ), 'a repeated failure must not queue a second i
 $service->fail = false;
 $cleanup->retry_cancel( 321, 'tr_cleanup_test', 1 );
 expect( 5 === $service->cancel_calls && 1 === count( $order->notes ) && false !== strpos( $order->notes[0], 'processing' ), 'the retry cancels and notes the order\'s status at that time' );
+expect( 'tr_cleanup_test' === end( $service->only_ids ), 'the retry names the payment it may cancel, for the check under the cancel lock' );
+// The order was reopened (pending) before the retry ran: the cashier is collecting
+// that same payment again, so the retry must not touch it.
+$order = make_order( 'open' );
+$order->status = 'pending';
+$GLOBALS['mtfwc_cleanup_order'] = $order;
+$cleanup->retry_cancel( 321, 'tr_cleanup_test', 1 );
+expect( 5 === $service->cancel_calls, 'a retry must not cancel the payment of an order that is payable again' );
 // The retry finds a different current payment (the cashier reopened the order and started again): it must not cancel.
 $order = make_order( 'open' );
 $order->meta[ PaymentAttempt::META_CURRENT_PAYMENT_ID ] = 'tr_newer_attempt';
@@ -131,5 +143,12 @@ expect( 1 === count( $scheduled ) && array( 321, 'tr_cleanup_test', 2 ) === $sch
 $scheduled = array();
 $cleanup->retry_cancel( 321, 'tr_cleanup_test', 4 );
 expect( array() === $scheduled && 1 === count( $order->notes ) && false !== strpos( $order->notes[0], 'could not be canceled automatically' ), 'after the last retry the order gets a note and nothing more is scheduled' );
+// WordPress refuses to store the event: no retry will come, so the note is left now.
+$order = make_order( 'open' );
+$GLOBALS['mtfwc_cleanup_order'] = $order;
+$schedule_result = false;
+$cleanup->maybe_cancel_abandoned_payment( 321, 'pending', 'completed', $order );
+expect( array() === $scheduled && 1 === count( $order->notes ) && false !== strpos( $order->notes[0], 'could not be canceled automatically' ), 'a retry that cannot be scheduled leaves the note at once' );
+$schedule_result = true;
 
 echo "payment-cleanup ok\n";
