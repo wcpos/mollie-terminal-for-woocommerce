@@ -124,7 +124,20 @@ class PaymentSweeper {
 		if ( $order->is_paid() ) { return $swept; }
 		$current = PaymentAttempt::current( $order );
 		if ( ! $current || empty( $current['payment_id'] ) ) { return $swept; }
-		if ( ! PaymentAttempt::is_non_final( (string) ( $current['status'] ?? '' ) ) ) { return $swept; }
+		$status = (string) ( $current['status'] ?? '' );
+		if ( 'paid' === $status ) {
+			// A completion died after storing the verified paid attempt, before
+			// payment_complete(). The poll path asks Mollie again and completes it under
+			// the completion claim, once. A paid_unverified attempt is not 'paid': left alone.
+			Logger::log( 'Recovering a paid Mollie terminal payment whose order was not completed.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'] ), 'warning' );
+			try {
+				$this->service()->poll_order( $order, 'stale_sweep' );
+			} catch ( Exception $e ) {
+				Logger::log( 'Paid-payment recovery failed for order: ' . $e->getMessage(), array( 'order_id' => (int) $order->get_id() ), 'error' );
+			}
+			return true;
+		}
+		if ( ! PaymentAttempt::is_non_final( $status ) ) { return $swept; }
 		$created = strtotime( (string) ( $current['created_at'] ?? '' ) );
 		if ( ! $created || ( time() - $created ) < self::stale_threshold() ) { return $swept; }
 		Logger::log( 'Sweeping stale open Mollie terminal payment.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'] ), 'info' );

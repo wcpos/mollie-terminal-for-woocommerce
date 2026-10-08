@@ -10,6 +10,10 @@ class PaymentAttempt {
 	public const META_CURRENT_PAYMENT_CREATED_AT = '_mtfwc_current_payment_created_at';
 	public const META_ATTEMPTS = '_mtfwc_payment_attempts';
 	public const META_ABANDONED_PAYMENT_IDS = '_mtfwc_abandoned_payment_ids';
+	// Stored (never a Mollie status): Mollie reported the payment paid, but it did
+	// not verify against this order. Final, so the stale-payment sweep leaves it
+	// alone; a cashier's poll, refresh, Start or cancel asks Mollie and verifies again.
+	public const STATUS_PAID_UNVERIFIED = 'paid_unverified';
 
 	public static function current( $order ): ?array {
 		$payment_id = $order->get_meta( self::META_CURRENT_PAYMENT_ID );
@@ -70,9 +74,10 @@ class PaymentAttempt {
 		return $attempt;
 	}
 
-	public static function update_status( $order, array $payment ): void {
+	/** $status overrides the Mollie status that is stored (STATUS_PAID_UNVERIFIED). */
+	public static function update_status( $order, array $payment, string $status = '' ): void {
 		$payment_id = self::payment_id( $payment );
-		$status = self::payment_status( $payment );
+		$status = '' !== $status ? $status : self::payment_status( $payment );
 		// Only the current attempt owns the current-status pointer. A reconcile of
 		// an abandoned payment (webhook or stale sweep) must not stamp its status
 		// onto whatever attempt the cashier is running now.
@@ -178,6 +183,8 @@ class PaymentAttempt {
 	public static function payment_status( array $payment ): string { return (string) ( $payment['status'] ?? 'unknown' ); }
 	public static function is_final_unpaid( string $status ): bool { return in_array( $status, array( 'failed', 'canceled', 'expired' ), true ); }
 	public static function is_final( string $status ): bool { return 'paid' === $status || self::is_final_unpaid( $status ); }
+	/** Stored attempt status for a payment Mollie reported paid, verified or not. */
+	public static function reported_paid( string $status ): bool { return in_array( $status, array( 'paid', self::STATUS_PAID_UNVERIFIED ), true ); }
 	public static function is_non_final( string $status ): bool { return in_array( $status, array( 'open', 'pending', 'authorized', '' ), true ); }
 	public static function is_qr_method( string $method ): bool { return in_array( $method, array( 'ideal', 'bancontact' ), true ); }
 }

@@ -313,6 +313,19 @@ async function flush() {
 	await resolveNext({ status: 'paid', redirect_url: thankYouUrl });
 	assert.strictEqual(paidResumePanel.mtfwcCompleted, true, 'the resumed panel completes the order once the poll reports it paid');
 
+	// A refreshed panel for a paid_unverified attempt resumes; when the poll still
+	// fails verification the panel reports a failed payment and stops polling.
+	const unverifiedResumePanel = makePanel('8888', { 'data-resume': '1' });
+	panels.push(unverifiedResumePanel);
+	jqueryHandlers.updated_checkout();
+	await resolveNext({ terminals: [{ id: 'term_default', label: 'Back office', status: 'active' }], default_terminal_id: 'term_default' });
+	await fireTimers();
+	assert.strictEqual(lastAction(), 'mtfwc_poll_payment', 'the resumed paid_unverified panel polls on load');
+	await resolveNext({ status: 'verification_failed', payment_status: 'paid', errors: ['amount mismatch'] });
+	assert(!unverifiedResumePanel.mtfwcPoll, 'a verification failure stops the poll loop');
+	assert(!unverifiedResumePanel.mtfwcCompleted, 'a verification failure never completes the order');
+	assert(/failed/i.test(unverifiedResumePanel.querySelector('.mtfwc-payment-status').textContent), 'a verification failure is reported as a failed payment');
+
 	// A failed cancel request must surface an error, not silently reset.
 	const cancelPanel = makePanel('654');
 	panels.push(cancelPanel);

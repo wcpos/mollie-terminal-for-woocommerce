@@ -100,7 +100,7 @@ class MolliePaymentService {
 		return $result;
 	}
 
-	public function poll_order( $order ): array {
+	public function poll_order( $order, string $source = 'poll' ): array {
 		$current = PaymentAttempt::current( $order );
 		if ( ! $current ) {
 			Logger::log( 'Mollie terminal poll skipped because no payment attempt exists.', array( 'order_id' => (int) $order->get_id() ), 'info' );
@@ -110,14 +110,16 @@ class MolliePaymentService {
 		// A completion that died after saving the attempt as paid, before
 		// payment_complete(), leaves a paid attempt on an unpaid order: ask Mollie
 		// again and reconcile, so the poll completes it rather than echo "paid".
-		if ( PaymentAttempt::is_non_final( $status ) || ( 'paid' === $status && ! $order->is_paid() ) ) {
+		// A paid attempt that failed verification is verified again the same way.
+		if ( PaymentAttempt::is_non_final( $status ) || ( PaymentAttempt::reported_paid( $status ) && ! $order->is_paid() ) ) {
 			Logger::log( 'Polling Mollie terminal payment.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'] ?? '' ), 'info' );
 			$include = PaymentAttempt::is_qr_method( $current['method'] ) ? array( 'details.qrCode' ) : array();
 			$payment = $this->client->get_payment( $current['payment_id'], $include );
-			$result = $this->reconciler->reconcile( $order, $payment, 'poll' );
+			$result = $this->reconciler->reconcile( $order, $payment, $source );
 			$result = $this->with_qr_code( $result, $payment );
 		} else {
-			$result = array( 'status' => $status );
+			// The panel knows verification_failed, not the stored paid_unverified.
+			$result = array( 'status' => PaymentAttempt::STATUS_PAID_UNVERIFIED === $status ? 'verification_failed' : $status );
 		}
 		Logger::log( 'Mollie terminal poll completed.', array( 'order_id' => (int) $order->get_id(), 'status' => $result['status'] ?? '' ), 'info' );
 		$created = strtotime( $current['created_at'] ?? '' );
