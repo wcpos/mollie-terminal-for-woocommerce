@@ -36,6 +36,8 @@ class FakeOrderForAbandon {
 	public $transaction_id = '';
 	public function is_paid() { return $this->paid; }
 	public function get_id() { return 5555; }
+	public $status = 'pending';
+	public function get_status() { return $this->status; }
 	public $payment_method = '';
 	public $payment_method_title = '';
 	public function get_payment_method() { return $this->payment_method; }
@@ -56,8 +58,9 @@ class FakeOrderForAbandon {
 class ScriptedMollieClient extends MollieApiClient {
 	public $get_responses;
 	public $cancel_calls = 0;
+	public $get_calls = 0;
 	public function __construct( array $get_responses ) { $this->get_responses = $get_responses; }
-	public function get_payment( string $payment_id, array $include = array() ): array { return array_shift( $this->get_responses ); }
+	public function get_payment( string $payment_id, array $include = array() ): array { $this->get_calls++; return array_shift( $this->get_responses ); }
 	public function cancel_payment( string $payment_id ): array { $this->cancel_calls++; return array( 'id' => $payment_id, 'status' => 'canceled' ); }
 }
 
@@ -88,6 +91,30 @@ expect( 'abandoned' === ( $history[0]['status'] ?? '' ), 'the attempt should be 
 // The payment is still open at Mollie: keep its ID where the stale sweep looks,
 // otherwise clearing the current pointer hides it from the WP-Cron backstop.
 expect( array( 'tr_open' ) === PaymentAttempt::abandoned( $order ), 'abandon must park the payment ID for the stale sweep' );
+
+// #35: the cleanup retry names its payment and the service re-reads the order
+// under the cancel lock: a payable order, or a different current payment, is
+// skipped before Mollie is asked anything.
+require_once __DIR__ . '/../../includes/PaymentCleanup.php';
+$order  = seed_order();
+$order->status = 'pending';
+$client = new ScriptedMollieClient( array( array( 'id' => 'tr_open', 'status' => 'open', 'isCancelable' => true ) ) );
+$result = ( new MolliePaymentService( $client, $settings, $terminals ) )->cancel_order_payment( $order, 'tr_open' );
+expect( 'skipped' === ( $result['status'] ?? '' ) && 0 === $client->cancel_calls && 0 === $client->get_calls, 'a named cancel on a payable order is skipped without asking Mollie' );
+expect( 'tr_open' === (string) $order->get_meta( PaymentAttempt::META_CURRENT_PAYMENT_ID ), 'the skipped cancel leaves the current payment' );
+$order  = seed_order();
+$order->status = 'processing';
+$client = new ScriptedMollieClient( array( array( 'id' => 'tr_open', 'status' => 'open', 'isCancelable' => true ) ) );
+$result = ( new MolliePaymentService( $client, $settings, $terminals ) )->cancel_order_payment( $order, 'tr_older' );
+expect( 'skipped' === ( $result['status'] ?? '' ) && 0 === $client->cancel_calls && 0 === $client->get_calls, 'a named cancel for a payment that is no longer current is skipped' );
+$order  = seed_order();
+$order->status = 'processing';
+$client = new ScriptedMollieClient( array(
+	array( 'id' => 'tr_open', 'status' => 'open', 'isCancelable' => true ),
+	array( 'id' => 'tr_open', 'status' => 'canceled', 'amount' => array( 'value' => '0.01', 'currency' => 'EUR' ), 'method' => 'pointofsale', 'mode' => 'live', 'metadata' => array( 'order_id' => '5555' ) ),
+) );
+$result = ( new MolliePaymentService( $client, $settings, $terminals ) )->cancel_order_payment( $order, 'tr_open' );
+expect( 'canceled' === ( $result['status'] ?? '' ) && 1 === $client->cancel_calls, 'a named cancel on a non-payable order with that payment current proceeds' );
 
 // Case 2: terminal was off but payment still cancelable -> Mollie cancels it.
 $order  = seed_order();

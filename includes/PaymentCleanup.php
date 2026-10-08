@@ -25,7 +25,7 @@ class PaymentCleanup {
 	// outage; a payment still open after that gets an error log and an order note.
 	private const RETRY_LIMIT = 4;
 	// Order statuses under which an open terminal payment must not stay open.
-	private const NON_PAYABLE = array( 'processing', 'completed', 'cancelled', 'failed' );
+	public const NON_PAYABLE = array( 'processing', 'completed', 'cancelled', 'failed' );
 
 	private $service;
 
