@@ -98,6 +98,7 @@ class FakeRaceOrder {
 
 	public function save() {
 		$GLOBALS['mtfwc_saves']++;
+		if ( ! empty( $GLOBALS['mtfwc_on_save'] ) ) { ( $GLOBALS['mtfwc_on_save'] )(); }
 		// WC_Data persists changes, not the entire stale snapshot; notes are immediate.
 		foreach ( $this->changed_fields as $field => $changed ) {
 			$GLOBALS['mtfwc_order_rows'][ $this->get_id() ][ $field ] = $this->row[ $field ];
@@ -118,6 +119,11 @@ class FakeRaceOrder {
 		if ( $GLOBALS['mtfwc_throw_completion'] ) {
 			$GLOBALS['mtfwc_throw_completion'] = false;
 			throw new RuntimeException( 'completion failed' );
+		}
+		if ( $GLOBALS['mtfwc_during_completion'] ) {
+			$during = $GLOBALS['mtfwc_during_completion'];
+			$GLOBALS['mtfwc_during_completion'] = null;
+			$during();
 		}
 		if ( ! in_array( $this->row['status'], array( 'pending', 'failed', 'on-hold' ), true ) ) { return false; }
 		$this->row['status'] = 'processing';
@@ -182,6 +188,8 @@ function reset_race_order() {
 	$GLOBALS['mtfwc_saves'] = 0;
 	$GLOBALS['mtfwc_throw_completion'] = false;
 	$GLOBALS['mtfwc_missing_order'] = false;
+	$GLOBALS['mtfwc_during_completion'] = null;
+	$GLOBALS['mtfwc_on_save'] = null;
 }
 
 $payment = array(
@@ -409,6 +417,75 @@ race_new_request();
 $retried = $reconciler->reconcile( wc_get_order( 38029 ), $payment, 'abandoned_sweep' );
 expect( 'paid' === $retried['status'] && 1 === $GLOBALS['mtfwc_payment_complete_calls'], 'the retry completes the order once' );
 expect( ! isset( $GLOBALS['mtfwc_order_rows'][38029]['meta'][ PaymentAttempt::META_ABANDONED_PAYMENT_IDS ] ), 'a completed paid payment leaves the abandoned list' );
+
+// Scenario 3i (#32 review): the abandoned list is read-modify-written as stored,
+// never written back from a request's earlier snapshot. While payment A completes
+// (stock, emails), the cashier's cancel abandons a newer payment B in another
+// request; forgetting A must keep B listed, or B stays open at Mollie untracked.
+$abandoned_key = PaymentAttempt::META_ABANDONED_PAYMENT_IDS;
+reset_race_order();
+$GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] = array( $payment['id'] );
+$GLOBALS['mtfwc_during_completion'] = function () use ( $abandoned_key, $payment ) {
+	$GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] = array( $payment['id'], 'tr_newerB' );
+};
+$completed = $reconciler->reconcile( wc_get_order( 38029 ), $payment, 'abandoned_sweep' );
+expect( 'paid' === $completed['status'] && 1 === $GLOBALS['mtfwc_payment_complete_calls'], 'setup: A completes the order once' );
+expect( array( 'tr_newerB' ) === ( $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] ?? null ), 'forgetting A after completion must keep a payment another request abandoned meanwhile (stored: ' . json_encode( $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] ?? null ) . ')' );
+// The same for a final unpaid A reconciled from a copy loaded before B was abandoned.
+reset_race_order();
+$GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] = array( $payment['id'] );
+$webhook_copy = wc_get_order( 38029 );
+$GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] = array( $payment['id'], 'tr_newerB' );
+race_new_request();
+$reconciler->reconcile( $webhook_copy, array_merge( $payment, array( 'status' => 'canceled' ) ), 'webhook' );
+expect( array( 'tr_newerB' ) === ( $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] ?? null ), 'forgetting a canceled A from an earlier copy must keep B (stored: ' . json_encode( $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] ?? null ) . ')' );
+// And abandon_current() adds to the stored list, not to its earlier copy's.
+reset_race_order();
+$cancel_copy = wc_get_order( 38029 );
+$GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] = array( 'tr_otherC' );
+race_new_request();
+PaymentAttempt::abandon_current( $cancel_copy );
+expect( array( 'tr_otherC', $payment['id'] ) === ( $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] ?? null ), 'abandoning must add to the stored list, keeping entries added since this copy loaded (stored: ' . json_encode( $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] ?? null ) . ')' );
+expect( ! isset( $GLOBALS['mtfwc_order_rows'][38029]['meta'][ PaymentAttempt::META_CURRENT_PAYMENT_ID ] ), 'abandoning still clears the current pointer' );
+
+// Scenario 3j (#33 review): the abandoned list's read-modify-write runs under a
+// per-order lock, so a completion forgetting A and a cancel adding B cannot both
+// read [A] and the later save drop the other's change.
+$list_lock = 'mtfwc_lock_order_38029_abandoned_list';
+reset_race_order();
+$GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] = array( $payment['id'], 'tr_keepB' );
+$wpdb->log = array();
+$locked_saves = array();
+$GLOBALS['mtfwc_on_save'] = function () use ( &$locked_saves, $wpdb, $list_lock ) { $locked_saves[] = isset( $wpdb->rows[ $list_lock ] ); };
+PaymentAttempt::forget_abandoned( wc_get_order( 38029 ), $payment['id'] );
+$GLOBALS['mtfwc_on_save'] = null;
+$list_lock_log = array_values( array_filter( $wpdb->log, function ( $entry ) use ( $list_lock ) { return $list_lock === $entry[1]; } ) );
+expect( array( array( 'INSERT', $list_lock ), array( 'DELETE', $list_lock ) ) === $list_lock_log, 'the list write must claim the lock and then compare-and-delete it (log: ' . json_encode( $list_lock_log ) . ')' );
+expect( array( true ) === $locked_saves, 'the list must be saved while the lock is held' );
+expect( ! isset( $wpdb->rows[ $list_lock ] ) && array( 'tr_keepB' ) === $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ], 'the lock is released and only A is removed' );
+// Another request holds the list: a removal gives up after the waits (~1.5 s) and saves nothing.
+// The held lock is planted fresh and long-lived for each busy check, so a paused
+// runner cannot let it expire mid-check; the schedule is asserted by counting
+// claim attempts in the log, not by the wall clock.
+reset_race_order();
+$GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] = array( $payment['id'] );
+$wpdb->rows[ $list_lock ] = json_encode( array( 'token' => 'other-request', 'expires_at' => time() + 300 ) );
+$wpdb->log = array();
+$started = microtime( true );
+PaymentAttempt::forget_abandoned( wc_get_order( 38029 ), $payment['id'] );
+$waited = microtime( true ) - $started;
+$claims = count( array_filter( $wpdb->log, function ( $entry ) use ( $list_lock ) { return array( 'INSERT', $list_lock ) === $entry; } ) );
+expect( array( $payment['id'] ) === $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] && 0 === $GLOBALS['mtfwc_saves'], 'a removal must not write the list while another request holds it' );
+expect( 5 === $claims && $waited >= 1.4, 'a removal claims once then once per wait before giving up (claims ' . $claims . ', waited ' . round( $waited, 2 ) . ' s)' );
+expect( false !== strpos( $wpdb->rows[ $list_lock ], 'other-request' ), 'the other request keeps its lock' );
+// Another request holds the list: an addition still parks the id, through the re-read.
+reset_race_order();
+$GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] = array( 'tr_otherC' );
+$wpdb->rows[ $list_lock ] = json_encode( array( 'token' => 'other-request', 'expires_at' => time() + 300 ) );
+PaymentAttempt::abandon_current( wc_get_order( 38029 ) );
+expect( array( 'tr_otherC', $payment['id'] ) === $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ], 'an addition must park the id even when the list lock is busy (stored: ' . json_encode( $GLOBALS['mtfwc_order_rows'][38029]['meta'][ $abandoned_key ] ) . ')' );
+expect( false !== strpos( $wpdb->rows[ $list_lock ], 'other-request' ), 'an addition without the lock must not release the other request\'s lock' );
+unset( $wpdb->rows[ $list_lock ] );
 
 // Scenario 4: recover a claim left by a request that died.
 reset_race_order();
