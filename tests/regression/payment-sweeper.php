@@ -246,6 +246,17 @@ $service = new CountingCancelService();
 ( new PaymentSweeper( $service ) )->sweep();
 expect( 25 === $service->cancel_calls, 'the current-attempt list acts on one batch per run (canceled ' . $service->cancel_calls . ')' );
 expect( 25 === $service->abandoned_calls, 'a full current-attempt list must not starve the abandoned-only list of its batch (resolved ' . $service->abandoned_calls . ')' );
+
+// #31 review: an order on both lists past the first batch's budget (position 26+
+// of the in-progress list) is not swept by the first batch, so the abandoned
+// batch must still sweep it.
+$late_overlap = $GLOBALS['sweeper_current_pool'][40];
+$late_overlap->meta[ PaymentAttempt::META_ABANDONED_PAYMENT_IDS ] = array( 'tr_late_overlap' );
+$GLOBALS['sweeper_abandoned_pool'] = array( $late_overlap );
+$service = new CountingCancelService();
+( new PaymentSweeper( $service ) )->sweep();
+expect( 1 === $service->abandoned_calls, 'an overlapping order past the first batch\'s budget must still be checked by the abandoned batch (resolved ' . $service->abandoned_calls . ')' );
+expect( 26 === $service->cancel_calls, 'the first batch cancels its 25; the abandoned batch sweeps the late overlapping order once, including its stale current attempt (canceled ' . $service->cancel_calls . ')' );
 $GLOBALS['sweeper_current_pool'] = array();
 $GLOBALS['sweeper_abandoned_pool'] = array();
 

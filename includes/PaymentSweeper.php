@@ -72,21 +72,26 @@ class PaymentSweeper {
 		// Orders holding a payment that was abandoned locally while still open at
 		// Mollie. Their current-attempt pointer is gone, so the query above cannot
 		// see them, and their status is irrelevant: the order may since have been
-		// paid in cash or cancelled while the payment stayed open. An order on both
-		// lists is swept once, with the first.
-		$abandoned = array_diff_key( $this->find_orders( 'any', PaymentAttempt::META_ABANDONED_PAYMENT_IDS, $limit ), $current );
+		// paid in cash or cancelled while the payment stayed open.
+		$abandoned = $this->find_orders( 'any', PaymentAttempt::META_ABANDONED_PAYMENT_IDS, $limit );
 		// Each list acts on (makes Mollie calls for) at most one batch per run, as
 		// when each query fetched a single batch, so neither list starves the other.
-		$swept = $this->sweep_batch( $current, $limit ) + $this->sweep_batch( $abandoned, $limit );
+		// An order on both lists that the first batch already swept is skipped by
+		// the second; one past the first batch's budget is still swept by the second.
+		$visited = array();
+		$swept = $this->sweep_batch( $current, $limit, $visited );
+		$swept += $this->sweep_batch( array_diff_key( $abandoned, $visited ), $limit, $visited );
 		if ( $swept > 0 ) {
 			Logger::log( 'Mollie terminal stale-payment sweep finished.', array( 'canceled' => $swept, 'scanned' => count( $current ) + count( $abandoned ) ), 'info' );
 		}
 	}
 
-	private function sweep_batch( array $orders, int $budget ): int {
+	/** Sweeps orders until $budget of them were acted on; adds every order it swept to $visited. */
+	private function sweep_batch( array $orders, int $budget, array &$visited ): int {
 		$swept = 0;
-		foreach ( $orders as $order ) {
+		foreach ( $orders as $id => $order ) {
 			if ( $swept >= $budget ) { break; }
+			$visited[ $id ] = true;
 			if ( $this->sweep_order( $order ) ) { $swept++; }
 		}
 		return $swept;
