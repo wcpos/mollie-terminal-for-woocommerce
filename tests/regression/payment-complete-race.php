@@ -14,11 +14,23 @@ require_once __DIR__ . '/../../includes/Settings.php';
 require_once __DIR__ . '/../../includes/Utils/Money.php';
 require_once __DIR__ . '/../../includes/PaymentAttempt.php';
 require_once __DIR__ . '/../../includes/PaymentReconciler.php';
+require_once __DIR__ . '/../../includes/Services/MollieApiClient.php';
+require_once __DIR__ . '/../../includes/Services/TerminalService.php';
+require_once __DIR__ . '/../../includes/Services/MolliePaymentService.php';
 
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentAttempt;
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentLock;
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentReconciler;
 use WCPOS\WooCommercePOS\MollieTerminal\Settings;
+use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieApiClient;
+use WCPOS\WooCommercePOS\MollieTerminal\Services\MolliePaymentService;
+
+class FakeRaceClient extends MollieApiClient {
+	public $payment;
+	public $gets = 0;
+	public function __construct( array $payment ) { $this->payment = $payment; }
+	public function get_payment( string $payment_id, array $include = array() ): array { $this->gets++; return $this->payment; }
+}
 
 class FakeRaceOrder {
 	private $row;
@@ -279,6 +291,31 @@ try {
 $wpdb->insert_error = false;
 $recovered = $reconciler->reconcile( wc_get_order( 38029 ), $payment, 'poll' );
 expect( 'paid' === $recovered['status'] && 1 === $GLOBALS['mtfwc_payment_complete_calls'], 'the poll after the database recovers must complete once' );
+
+// Scenario 3e (#28 review): the claim holder died after update_status() saved the
+// attempt as paid but before payment_complete(). poll_order() must not echo the
+// stored "paid" for an unpaid order: it stays non-terminal while the dead claim
+// is live, and the poll after it expires completes the order exactly once.
+reset_race_order();
+$holder_copy = wc_get_order( 38029 );
+PaymentAttempt::update_status( $holder_copy, $payment );
+$GLOBALS['mtfwc_post_cache'] = array();
+expect( 'paid' === $GLOBALS['mtfwc_order_rows'][38029]['meta'][ PaymentAttempt::META_CURRENT_PAYMENT_STATUS ] && 'pending' === $GLOBALS['mtfwc_order_rows'][38029]['status'], 'setup: the attempt is saved paid on a still-unpaid order' );
+$wpdb->rows[ $key ] = json_encode( array( 'token' => 'died-after-update', 'expires_at' => time() + 120 ) );
+$poll_client = new FakeRaceClient( $payment );
+$service = new MolliePaymentService( $poll_client, new Settings( array( 'mode' => 'live' ) ) );
+$first = $service->poll_order( wc_get_order( 38029 ) );
+expect( 'paid' !== ( $first['status'] ?? '' ), 'a stored paid attempt on an unpaid order must not be reported paid while the dead claim is live (got ' . json_encode( $first ) . ')' );
+expect( true === ( $first['completing'] ?? false ), 'the poll must report the verified payment as completing' );
+expect( 1 === $poll_client->gets && 0 === $GLOBALS['mtfwc_payment_complete_calls'], 'the poll must re-check Mollie and leave completion to the claim' );
+$wpdb->rows[ $key ] = json_encode( array( 'token' => 'died-after-update', 'expires_at' => time() - 1 ) );
+$second = $service->poll_order( wc_get_order( 38029 ) );
+expect( 'paid' === ( $second['status'] ?? '' ), 'the poll after the dead claim expires must report paid (got ' . json_encode( $second ) . ')' );
+expect( 1 === $GLOBALS['mtfwc_payment_complete_calls'] && 1 === $GLOBALS['mtfwc_stock_reductions'], 'the poll after expiry must complete the order exactly once' );
+expect( 'processing' === $GLOBALS['mtfwc_order_rows'][38029]['status'] && $payment['id'] === $GLOBALS['mtfwc_order_rows'][38029]['transaction_id'], 'the order must be paid by the Mollie payment' );
+$GLOBALS['mtfwc_post_cache'] = array();
+$third = $service->poll_order( wc_get_order( 38029 ) );
+expect( 'paid' === ( $third['status'] ?? '' ) && 2 === $poll_client->gets && 1 === $GLOBALS['mtfwc_payment_complete_calls'], 'once the order is paid, the stored paid attempt is answered without asking Mollie again' );
 
 // Scenario 4: recover a claim left by a request that died.
 reset_race_order();

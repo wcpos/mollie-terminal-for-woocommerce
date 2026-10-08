@@ -107,7 +107,10 @@ class MolliePaymentService {
 			return array( 'status' => 'idle' );
 		}
 		$status = (string) ( $current['status'] ?? '' );
-		if ( PaymentAttempt::is_non_final( $status ) ) {
+		// A completion that died after saving the attempt as paid, before
+		// payment_complete(), leaves a paid attempt on an unpaid order: ask Mollie
+		// again and reconcile, so the poll completes it rather than echo "paid".
+		if ( PaymentAttempt::is_non_final( $status ) || ( 'paid' === $status && ! $order->is_paid() ) ) {
 			Logger::log( 'Polling Mollie terminal payment.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'] ?? '' ), 'info' );
 			$include = PaymentAttempt::is_qr_method( $current['method'] ) ? array( 'details.qrCode' ) : array();
 			$payment = $this->client->get_payment( $current['payment_id'], $include );

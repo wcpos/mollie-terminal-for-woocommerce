@@ -120,6 +120,12 @@ async function flush() {
 	const storage = {};
 	const placeOrderButton = new FakeElement([]);
 	let checkedPaymentMethod = 'mollie_terminal_for_woocommerce';
+	// A real radio click checks it and fires change (WooCommerce shows its panel on click).
+	const gatewayRadio = {
+		clicks: 0,
+		get checked() { return 'mollie_terminal_for_woocommerce' === checkedPaymentMethod; },
+		click() { this.clicks++; checkedPaymentMethod = 'mollie_terminal_for_woocommerce'; firePaymentMethodChange(); },
+	};
 
 	// Controllable fake timers (payment.js uses setTimeout for the poll loop).
 	let timerSeq = 0;
@@ -150,6 +156,9 @@ async function flush() {
 			querySelector(selector) {
 				if ('input[name="payment_method"]:checked' === selector) {
 					return null === checkedPaymentMethod ? null : { value: checkedPaymentMethod };
+				}
+				if ('input[name="payment_method"][value="mollie_terminal_for_woocommerce"]' === selector) {
+					return gatewayRadio;
 				}
 				return null;
 			},
@@ -381,6 +390,57 @@ async function flush() {
 	assert.strictEqual(racePanel.mtfwcCompleted, true, 'the panel is marked complete when the cancel reconciled as paid');
 	assert(!/canceled/i.test(racePanel.querySelector('.mtfwc-payment-status').textContent), 'a paid order must never be reported as canceled');
 	checkedPaymentMethod = 'mollie_terminal_for_woocommerce';
+
+	// #28 review: the cashier switches to cash just as Mollie reports the payment
+	// paid while another request completes the order. The panel must put the order
+	// back on this gateway (so no second payment can be taken) and keep polling.
+	const switchPanel = makePanel('4444');
+	panels.push(switchPanel);
+	jqueryHandlers.updated_checkout();
+	await resolveNext({ terminals: [{ id: 'term_default', label: 'Back office', status: 'active' }], default_terminal_id: 'term_default' });
+	switchPanel.querySelector('.mtfwc-primary-action').click();
+	await resolveNext({ status: 'created' });
+	checkedPaymentMethod = 'cod';
+	firePaymentMethodChange();
+	await flush();
+	assert.strictEqual(lastAction(), 'mtfwc_cancel_payment', 'the method switch fires the cancel');
+	await resolveNext({ status: 'pending', completing: true, retry_allowed: false });
+	assert.strictEqual(checkedPaymentMethod, 'mollie_terminal_for_woocommerce', 'a switch that meets a completing payment must re-select the Mollie gateway');
+	assert.strictEqual(gatewayRadio.clicks, 1, 'the gateway radio is clicked once so WooCommerce shows its panel again');
+	assert(switchPanel.mtfwcPoll, 'the panel keeps polling the completing payment');
+	assert(/finishing/i.test(switchPanel.querySelector('.mtfwc-payment-status').textContent), 'the panel says the order is being finished');
+	await fireTimers();
+	assert.strictEqual(lastAction(), 'mtfwc_poll_payment', 'the re-selected panel polls');
+	await resolveNext({ status: 'paid', redirect_url: raceUrl });
+	assert.strictEqual(switchPanel.mtfwcCompleted, true, 'the order completes once the server reports it paid');
+
+	// #28 review: Start reuses an attempt Mollie reports paid while another request
+	// completes the order. Terminal and QR alike say "finishing", never "waiting"
+	// or a missing QR code, and keep polling.
+	const startTerminalPanel = makePanel('5555');
+	panels.push(startTerminalPanel);
+	jqueryHandlers.updated_checkout();
+	await resolveNext({ terminals: [{ id: 'term_default', label: 'Back office', status: 'active' }], default_terminal_id: 'term_default' });
+	startTerminalPanel.querySelector('.mtfwc-primary-action').click();
+	await resolveNext({ status: 'pending', completing: true, retry_allowed: false, reused: true, channel: 'terminal', method: 'pointofsale' });
+	assert(/finishing/i.test(startTerminalPanel.querySelector('.mtfwc-payment-status').textContent), 'a Start that reuses a completing payment says the order is being finished');
+	assert(startTerminalPanel.mtfwcPoll, 'a Start that reuses a completing payment keeps polling');
+	await fireTimers();
+	await resolveNext({ status: 'paid', redirect_url: raceUrl });
+	assert.strictEqual(startTerminalPanel.mtfwcCompleted, true, 'the reused completing payment finishes the order');
+	const startQrPanel = makePanel('6666', { 'data-qr-methods': 'ideal' });
+	panels.push(startQrPanel);
+	jqueryHandlers.updated_checkout();
+	await resolveNext({ terminals: [], default_terminal_id: '' });
+	startQrPanel.querySelectorAll('.mtfwc-channel')[1].click();
+	startQrPanel.querySelector('.mtfwc-primary-action').click();
+	await resolveNext({ status: 'pending', completing: true, retry_allowed: false, reused: true, channel: 'qr', method: 'ideal' });
+	const startQrStatus = startQrPanel.querySelector('.mtfwc-payment-status');
+	assert(!/did not return a QR code/i.test(startQrStatus.textContent) && !/error/.test(startQrStatus.className), 'a QR Start that reuses a completing payment must not report a missing QR code');
+	assert(/finishing/i.test(startQrStatus.textContent), 'a QR Start that reuses a completing payment says the order is being finished');
+	await fireTimers();
+	await resolveNext({ status: 'paid', redirect_url: raceUrl });
+	assert.strictEqual(startQrPanel.mtfwcCompleted, true, 'the reused completing QR payment finishes the order');
 
 	// Checkout refresh binds new panels exactly once.
 	const refreshedPanel = makePanel('456');

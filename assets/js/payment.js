@@ -283,6 +283,17 @@
 		setStatus(root, t('finishing', 'Payment received — finishing order…'), 'info');
 	}
 
+	// Put the order back on this gateway (WooCommerce shows its panel again on the
+	// radio's click), so no other payment method can be taken for an order Mollie
+	// has already charged while the server finishes it.
+	function reselectGateway(root) {
+		var gateway = root.getAttribute('data-gateway-id');
+		var input = gateway && document.querySelector ? document.querySelector('input[name="payment_method"][value="' + gateway + '"]') : null;
+		if (input && !input.checked && 'function' === typeof input.click) {
+			input.click();
+		}
+	}
+
 	function resultQrCode(result) {
 		return result && result.json && result.json.data ? result.json.data.qr_code || null : null;
 	}
@@ -668,6 +679,10 @@
 				// the other channel than the one the cashier just picked. Follow it.
 				syncChannel(root, result);
 				var qrShown = showQr(root, resultQrCode(result));
+				if (resultCompleting(result)) {
+					resumeCompleting(root);
+					return;
+				}
 				startAutoPoll(root);
 				if ('qr' === selectedChannel(root) && !qrShown) {
 					setStatus(root, t('qrUnavailable', 'Mollie did not return a QR code. Try again or use the terminal.'), 'error');
@@ -776,7 +791,9 @@
 				return;
 			}
 			if (resultCompleting(result)) {
+				// Mollie has charged the customer: the switch must not lead to a second payment.
 				resumeCompleting(root);
+				reselectGateway(root);
 				return;
 			}
 			if ('abandoned' === status) {
