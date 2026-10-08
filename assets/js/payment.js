@@ -271,6 +271,29 @@
 		return '';
 	}
 
+	// Mollie reports the payment paid but the order is not completed yet (another
+	// request is completing it, or the completion claim failed). It is not
+	// canceled: keep polling until the server reports the order paid.
+	function resultCompleting(result) {
+		return !!(result && result.json && result.json.data && result.json.data.completing);
+	}
+
+	function resumeCompleting(root) {
+		startAutoPoll(root);
+		setStatus(root, t('finishing', 'Payment received — finishing order…'), 'info');
+	}
+
+	// Put the order back on this gateway (WooCommerce shows its panel again on the
+	// radio's click), so no other payment method can be taken for an order Mollie
+	// has already charged while the server finishes it.
+	function reselectGateway(root) {
+		var gateway = root.getAttribute('data-gateway-id');
+		var input = gateway && document.querySelector ? document.querySelector('input[name="payment_method"][value="' + gateway + '"]') : null;
+		if (input && !input.checked && 'function' === typeof input.click) {
+			input.click();
+		}
+	}
+
 	function resultQrCode(result) {
 		return result && result.json && result.json.data ? result.json.data.qr_code || null : null;
 	}
@@ -498,6 +521,10 @@
 					completeOrder(root, resultRedirect(result));
 					return;
 				}
+				if (resultCompleting(result)) {
+					resumeCompleting(root);
+					return;
+				}
 				setStatus(root, t('timedOut', 'Timed out waiting for the terminal. Check the terminal or try again.'), 'error');
 				resetToIdle(root);
 			});
@@ -530,7 +557,9 @@
 				showIdle(root);
 				resetToIdle(root);
 			} else {
-				if ('qr' !== selectedChannel(root)) {
+				if (resultCompleting(result)) {
+					setStatus(root, t('finishing', 'Payment received — finishing order…'), 'info');
+				} else if ('qr' !== selectedChannel(root)) {
 					setStatus(root, t('waiting', 'Waiting for terminal…'), 'info');
 				} else if ('open' !== status) {
 					setStatus(root, t('confirmingQr', 'Scanned — waiting for the bank to confirm…'), 'info');
@@ -650,6 +679,10 @@
 				// the other channel than the one the cashier just picked. Follow it.
 				syncChannel(root, result);
 				var qrShown = showQr(root, resultQrCode(result));
+				if (resultCompleting(result)) {
+					resumeCompleting(root);
+					return;
+				}
 				startAutoPoll(root);
 				if ('qr' === selectedChannel(root) && !qrShown) {
 					setStatus(root, t('qrUnavailable', 'Mollie did not return a QR code. Try again or use the terminal.'), 'error');
@@ -678,6 +711,10 @@
 			var status = resultStatus(result);
 			if ('paid' === classify(status)) {
 				completeOrder(root, resultRedirect(result));
+				return;
+			}
+			if (resultCompleting(result)) {
+				resumeCompleting(root);
 				return;
 			}
 			if ('abandoned' === status) {
@@ -751,6 +788,12 @@
 			if ('paid' === classify(status)) {
 				// Paid after all — finish the order rather than claim it was canceled.
 				completeOrder(root, resultRedirect(result));
+				return;
+			}
+			if (resultCompleting(result)) {
+				// Mollie has charged the customer: the switch must not lead to a second payment.
+				resumeCompleting(root);
+				reselectGateway(root);
 				return;
 			}
 			if ('abandoned' === status) {

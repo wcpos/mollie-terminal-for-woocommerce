@@ -107,7 +107,10 @@ class MolliePaymentService {
 			return array( 'status' => 'idle' );
 		}
 		$status = (string) ( $current['status'] ?? '' );
-		if ( PaymentAttempt::is_non_final( $status ) ) {
+		// A completion that died after saving the attempt as paid, before
+		// payment_complete(), leaves a paid attempt on an unpaid order: ask Mollie
+		// again and reconcile, so the poll completes it rather than echo "paid".
+		if ( PaymentAttempt::is_non_final( $status ) || ( 'paid' === $status && ! $order->is_paid() ) ) {
 			Logger::log( 'Polling Mollie terminal payment.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => $current['payment_id'] ?? '' ), 'info' );
 			$include = PaymentAttempt::is_qr_method( $current['method'] ) ? array( 'details.qrCode' ) : array();
 			$payment = $this->client->get_payment( $current['payment_id'], $include );
@@ -185,6 +188,10 @@ class MolliePaymentService {
 					Logger::log( 'Could not resolve abandoned Mollie terminal payment: ' . $e->getMessage(), array( 'order_id' => (int) $order->get_id(), 'payment_id' => $payment_id ), 'error' );
 					$results[ $payment_id ] = 'error';
 				}
+				// reconcile() saves a paid result on a re-read copy, not on $order (#21).
+				// Carry the database's version forward so a later payment's save cannot
+				// write back stale attempt history and abandoned IDs, resurrecting a paid one (#27).
+				$order = PaymentReconciler::reload_order( $order );
 			}
 			return $results;
 		} );

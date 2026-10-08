@@ -3,6 +3,8 @@ class FakeWpdb {
 	public $options = 'wp_options';
 	public $rows = array();
 	public $before_insert;
+	// Simulates $wpdb->query() returning false (a database error) for claim inserts.
+	public $insert_error = false;
 
 	public function prepare( $query, ...$args ) { return json_encode( array( $query, $args ) ); }
 
@@ -15,6 +17,7 @@ class FakeWpdb {
 				$this->before_insert = null;
 				$callback();
 			}
+			if ( $this->insert_error ) { return false; }
 			if ( array_key_exists( $args[0], $this->rows ) ) { return 0; }
 			$this->rows[ $args[0] ] = $args[1];
 			return 1;
