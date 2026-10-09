@@ -81,6 +81,8 @@ function init(): void {
 	}
 	add_filter( 'woocommerce_payment_gateways', array( Gateway::class, 'register_gateway' ) );
 	add_action( 'woocommerce_create_refund', array( RefundHandler::class, 'remember_refund' ), 10, 2 );
+	// A refund POST Mollie did not answer is asked about again, off the request path.
+	add_action( RefundReconciler::REASK_HOOK, array( RefundReconciler::class, 'reask' ), 10, 4 );
 	// The keypad's server mode, on Pro's shared base.
 	Server\Registration::register();
 	// Fold attempts the old order-pay panel left mid-flight into Pro's ledger, once per version.

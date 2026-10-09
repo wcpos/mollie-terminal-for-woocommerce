@@ -8,6 +8,7 @@ use WCPOS\WooCommercePOS\MollieTerminal\RefundReconciler;
 use WCPOS\WooCommercePOS\MollieTerminal\Settings;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieApiClient;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieNotFoundException;
+use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieRefundPostUnansweredException;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieUnansweredException;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\TerminalService;
 use WCPOS\WooCommercePOS\MollieTerminal\Utils\Money;
@@ -155,15 +156,17 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 			$result = ( new RefundReconciler( $this->client ) )->refund( $order, $refund, $amount, (string) $refund->get_reason(), $payment_id );
 			$statuses = array( 'refunded' => 'succeeded', 'queued' => 'pending', 'pending' => 'pending', 'processing' => 'pending', 'failed' => 'failed', 'canceled' => 'failed' );
 			return array( 'status' => $statuses[ $result['mollie_status'] ] ?? 'pending', 'provider_ref' => $result['refund_id'] ?: null );
-		} catch ( MollieUnansweredException $e ) {
-			// The refund may have been created. An error here would make WooCommerce delete the
-			// refund record, and a later refund would be a new record Mollie's metadata cannot be
-			// matched to: a second refund. So the record stands as pending, its attempt id saved
-			// before the POST, and the next ask for this record finds the refund Mollie made by that
-			// metadata (or, if none was made, creates it under the same attempt id).
-			Logger::log( 'Mollie did not answer a refund request; the refund record stays pending until Mollie is asked again.', array( 'refund_id' => $refund_id, 'message' => $e->getMessage() ), 'warning' );
+		} catch ( MollieRefundPostUnansweredException $e ) {
+			// The POST itself went unanswered: the refund may exist. An error here would make
+			// WooCommerce delete the refund record, and a later refund would be a new record Mollie's
+			// metadata cannot be matched to: a second refund. So the record stands as pending, the
+			// order says so, and the reconciler's own ask finds the refund Mollie made by its attempt
+			// id (the Idempotency-Key) or makes it under that same id.
+			Logger::log( 'Mollie did not answer a refund POST; the refund record stays pending and is checked again.', array( 'refund_id' => $refund_id, 'message' => $e->getMessage() ), 'warning' );
+			RefundReconciler::unanswered_post( $order, $refund_id, $payment_id, $amount );
 			return array( 'status' => 'pending', 'provider_ref' => null );
 		} catch ( RuntimeException | InvalidArgumentException $e ) {
+			// A read Mollie did not answer, or a refusal: nothing was created, and the merchant sees it.
 			return self::provider_error( $e->getMessage() );
 		}
 	}

@@ -3,6 +3,8 @@ namespace WCPOS\WooCommercePOS\MollieTerminal;
 
 use RuntimeException;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieApiClient;
+use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieRefundPostUnansweredException;
+use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieUnansweredException;
 use WCPOS\WooCommercePOS\MollieTerminal\Utils\Money;
 
 class RefundReconciler {
@@ -10,6 +12,12 @@ class RefundReconciler {
 	public const META_MOLLIE_REFUND_ID = '_mtfwc_mollie_refund_id';
 	public const META_STATUS = '_mtfwc_refund_status';
 	public const META_AMOUNT = '_mtfwc_refund_amount';
+	/** Cron hook that asks Mollie again about a refund whose POST went unanswered. */
+	public const REASK_HOOK = 'mtfwc_reask_refund';
+	/** Seconds before the first re-ask, and between re-asks; Mollie lists a refund it made at once, so this is for its outage. */
+	public const REASK_DELAY = 120;
+	/** Re-asks before giving up with an order note for staff. */
+	public const REASK_LIMIT = 5;
 	private $client;
 	public function __construct( MollieApiClient $client ) { $this->client = $client; }
 
@@ -42,9 +50,81 @@ class RefundReconciler {
 			$remaining = $this->remaining_refundable( $payment, $refunds, (string) $order->get_currency() );
 			if ( ! Money::equals( Money::subtract( $remaining, Money::to_mollie_value( $amount, $order->get_currency() ), $order->get_currency() ), Money::subtract( $remaining, Money::to_mollie_value( $amount, $order->get_currency() ), $order->get_currency() ), $order->get_currency() ) ) { /* normalization only */ }
 			$payload = array( 'amount' => array( 'currency' => $order->get_currency(), 'value' => Money::to_mollie_value( $amount, $order->get_currency() ) ), 'description' => $reason, 'metadata' => array( 'order_id' => (string) $order->get_id(), 'woo_refund_id' => (string) $woo_refund->get_id(), 'refund_attempt_id' => (string) $attempt_id ) );
-			$refund = $this->client->create_refund( $payment_id, $payload );
+			try {
+				// The attempt id is the Idempotency-Key too: a POST Mollie received but did not answer
+				// is replayed under it and Mollie hands back the refund it made.
+				$refund = $this->client->create_refund( $payment_id, $payload, (string) $attempt_id );
+			} catch ( MollieUnansweredException $e ) {
+				// Only the POST itself: an unanswered read before it created nothing and stays an
+				// error. The refund may exist now; the caller keeps the record and asks again.
+				throw new MollieRefundPostUnansweredException( $e->getMessage(), (string) $attempt_id );
+			}
 			return $this->store_refund( $woo_refund, $refund, $amount );
 		} );
+	}
+
+	/**
+	 * The first unanswered POST for a refund record: say so on the order and schedule the first ask.
+	 *
+	 * @param \WC_Order $order      Parent order.
+	 * @param int       $refund_id  WooCommerce refund record.
+	 * @param string    $payment_id Mollie payment.
+	 * @param string    $amount     Refund amount, major units.
+	 */
+	public static function unanswered_post( $order, int $refund_id, string $payment_id, string $amount ): void {
+		$order->add_order_note( sprintf( 'Mollie Terminal: the refund of %s was sent but Mollie did not answer; it is unconfirmed and will be checked again.', $amount ) );
+		$order->save();
+		self::schedule_reask( $refund_id, $payment_id, $amount, 1 );
+	}
+
+	/**
+	 * Schedule the next ask about a refund whose POST went unanswered.
+	 *
+	 * @param int    $refund_id  WooCommerce refund record.
+	 * @param string $payment_id Mollie payment.
+	 * @param string $amount     Refund amount, major units.
+	 * @param int    $try        Which ask this is.
+	 */
+	public static function schedule_reask( int $refund_id, string $payment_id, string $amount, int $try ): void {
+		if ( ! function_exists( 'wp_schedule_single_event' ) ) { return; }
+		$args = array( $refund_id, $payment_id, $amount, $try );
+		if ( function_exists( 'wp_next_scheduled' ) && wp_next_scheduled( self::REASK_HOOK, $args ) ) { return; }
+		wp_schedule_single_event( time() + self::REASK_DELAY, self::REASK_HOOK, $args );
+	}
+
+	/**
+	 * The scheduled ask: find the refund Mollie made under the attempt id (or make it under that
+	 * same id), record it on the refund record, and tell staff on the order. Mollie still not
+	 * answering waits another step; after the last step staff are asked to check the dashboard.
+	 *
+	 * @param int    $refund_id  WooCommerce refund record.
+	 * @param string $payment_id Mollie payment.
+	 * @param string $amount     Refund amount, major units.
+	 * @param int    $try        Which ask this is.
+	 * @param MollieApiClient|null $client The client to ask with; the configured one by default.
+	 */
+	public static function reask( $refund_id, $payment_id, $amount, $try = 1, $client = null ): void {
+		$refund = wc_get_order( (int) $refund_id );
+		$order  = $refund ? wc_get_order( (int) $refund->get_parent_id() ) : false;
+		if ( ! $refund || ! $order ) { return; }
+		$client = $client ?: new \WCPOS\WooCommercePOS\MollieTerminal\Services\MollieApiClient( ( new Settings() )->api_key() );
+		try {
+			$result = ( new self( $client ) )->refund( $order, $refund, (string) $amount, (string) $refund->get_reason(), (string) $payment_id );
+			$order->add_order_note( sprintf( 'Mollie Terminal: the refund of %s is confirmed with Mollie (refund %s, %s).', $amount, $result['refund_id'], $result['mollie_status'] ) );
+			$order->save();
+		} catch ( MollieRefundPostUnansweredException | MollieUnansweredException $e ) {
+			if ( (int) $try >= self::REASK_LIMIT ) {
+				Logger::log( 'Mollie Terminal gave up confirming a refund.', array( 'refund_id' => (int) $refund_id, 'payment_id' => $payment_id ), 'error' );
+				$order->add_order_note( sprintf( 'Mollie Terminal: the refund of %s could not be confirmed with Mollie. Check it in the Mollie dashboard before refunding again.', $amount ) );
+				$order->save();
+				return;
+			}
+			self::schedule_reask( (int) $refund_id, (string) $payment_id, (string) $amount, (int) $try + 1 );
+		} catch ( RuntimeException $e ) {
+			Logger::log( 'Mollie Terminal could not confirm a refund: ' . $e->getMessage(), array( 'refund_id' => (int) $refund_id, 'payment_id' => $payment_id ), 'error' );
+			$order->add_order_note( sprintf( 'Mollie Terminal: the refund of %s could not be confirmed with Mollie (%s). Check it in the Mollie dashboard before refunding again.', $amount, $e->getMessage() ) );
+			$order->save();
+		}
 	}
 
 	/**

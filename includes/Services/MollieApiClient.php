@@ -6,6 +6,7 @@ use WCPOS\WooCommercePOS\MollieTerminal\Logger;
 
 require_once __DIR__ . '/MollieUnansweredException.php'; // The client's own exceptions, loaded with it.
 require_once __DIR__ . '/MollieNotFoundException.php';
+require_once __DIR__ . '/MollieRefundPostUnansweredException.php';
 
 class MollieApiClient {
 	private const BASE_URL = 'https://api.mollie.com/v2';
@@ -30,7 +31,10 @@ class MollieApiClient {
 	public function cancel_payment( string $payment_id ): array { return $this->request( 'DELETE', '/payments/' . rawurlencode( $payment_id ) ); }
 	public function get_refund( string $payment_id, string $refund_id ): array { return $this->request( 'GET', '/payments/' . rawurlencode( $payment_id ) . '/refunds/' . rawurlencode( $refund_id ) ); }
 	public function list_refunds( string $payment_id ): array { return $this->request( 'GET', '/payments/' . rawurlencode( $payment_id ) . '/refunds' ); }
-	public function create_refund( string $payment_id, array $payload ): array { return $this->request( 'POST', '/payments/' . rawurlencode( $payment_id ) . '/refunds', $payload ); }
+	public function create_refund( string $payment_id, array $payload, string $idempotency_key = '' ): array {
+		$headers = '' === $idempotency_key ? array() : array( 'Idempotency-Key' => $idempotency_key );
+		return $this->request( 'POST', '/payments/' . rawurlencode( $payment_id ) . '/refunds', $payload, 0, $headers );
+	}
 
 	private function include_query( array $include ): string { return $include ? '?include=' . implode( ',', array_map( 'rawurlencode', $include ) ) : ''; }
 

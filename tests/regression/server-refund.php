@@ -23,11 +23,18 @@ use WCPOS\WooCommercePOS\MollieTerminal\Server\Mollie_Server_Provider as Provide
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieApiClient;
 use WCPOS\WooCommercePOS\MollieTerminal\RefundReconciler;
 class RefundOrder {
+	public $notes = array();
 	public function get_id() { return 123; }
 	public function get_transaction_id() { return ''; }
 	public function get_meta( $key ) { return ''; }
 	public function get_currency() { return 'EUR'; }
+	public function add_order_note( $note ) { $this->notes[] = $note; }
+	public function save() {}
 }
+$GLOBALS['scheduled'] = array();
+function wp_schedule_single_event( $at, $hook, $args = array() ) { $GLOBALS['scheduled'][] = array( $at, $hook, $args ); return true; }
+function wp_next_scheduled( $hook, $args = array() ) { foreach ( $GLOBALS['scheduled'] as $e ) { if ( $e[1] === $hook && $e[2] === $args ) { return $e[0]; } } return false; }
+function wp_unschedule_event( $at, $hook, $args = array() ) {}
 class WC_Order_Refund {
 	public $meta = array();
 	public $saved = array(); // the meta as persisted by each save()
@@ -44,7 +51,8 @@ class RefundClient extends MollieApiClient {
 	public $refunds = array();
 	public function __construct() {}
 	public function get_payment( string $payment_id, array $include = array() ): array { $this->calls[] = $payment_id; return array( 'amount' => array( 'value' => '30.00' ) ); }
-	public function list_refunds( string $payment_id ): array { $this->calls[] = $payment_id; return $this->refunds; }
+	public $list_throws = null;
+	public function list_refunds( string $payment_id ): array { $this->calls[] = $payment_id; if ( $this->list_throws ) { throw $this->list_throws; } return $this->refunds; }
 	public $refreshed = null;
 	public function get_refund( string $payment_id, string $refund_id ): array {
 		$this->calls[] = 'refund:' . $refund_id;
@@ -52,8 +60,10 @@ class RefundClient extends MollieApiClient {
 		return array( 'id' => $refund_id, 'status' => $this->refreshed );
 	}
 	public $attempt_persisted_at_post = null;
-	public function create_refund( string $payment_id, array $payload ): array {
+	public $post_keys = array();
+	public function create_refund( string $payment_id, array $payload, string $idempotency_key = '' ): array {
 		$this->calls[] = $payment_id;
+		$this->post_keys[] = $idempotency_key;
 		$this->attempt_persisted_at_post = $GLOBALS['orders'][456]->saved[ RefundReconciler::META_ATTEMPT_ID ] ?? null;
 		expect( 'Returned item' === $payload['description'] && '5.00' === $payload['amount']['value'], 'refund amount/reason' );
 		if ( $this->status instanceof Exception ) { throw $this->status; }
@@ -85,17 +95,37 @@ $client->calls = array();
 expect( array( 'status' => 'succeeded', 'provider_ref' => 're_x' ) === $provider->refund( array( 'provider_refs' => array( 'transaction_id' => 'tr_hist' ) ), 456, '5.00' ) && array( 'tr_hist', 'tr_hist', 'tr_hist' ) === $client->calls, 'a historical row refunds its transaction reference, with the order from the refund record' );
 $orders[456] = new WC_Order_Refund();
 $client->status = new WCPOS\WooCommercePOS\MollieTerminal\Services\MollieUnansweredException( 'Response lost' );
+$GLOBALS['scheduled'] = array(); $orders[123]->notes = array();
 $result = $provider->refund( $row, 456, '5.00' );
-expect( array( 'status' => 'pending', 'provider_ref' => null ) === $result, 'an unanswered refund is pending with its record kept, never an error WooCommerce would turn into a new record' );
-// The attempt id was persisted before the POST, so a retry on a fresh read of the record carries the
-// same id and finds the refund Mollie made by its metadata instead of creating a second one.
+expect( array( 'status' => 'pending', 'provider_ref' => null ) === $result, 'an unanswered refund POST is pending with its record kept, never an error WooCommerce would turn into a new record' );
+// The attempt id was persisted before the POST and sent as its Idempotency-Key, so the ask that follows
+// carries the same id and finds the refund Mollie made by its metadata (or Mollie dedupes the POST).
 $attempt = $client->attempt_persisted_at_post;
 expect( is_string( $attempt ) && '' !== $attempt && $attempt === $orders[456]->meta[ RefundReconciler::META_ATTEMPT_ID ], 'the attempt id is saved before the refund is posted' );
-$fresh = new WC_Order_Refund(); $fresh->meta = $orders[456]->saved; $orders[456] = $fresh;
+expect( array( $attempt ) === array_slice( $client->post_keys, -1 ), 'the refund POST carries the attempt id as its Idempotency-Key' );
+expect( 1 === count( $GLOBALS['scheduled'] ) && RefundReconciler::REASK_HOOK === $GLOBALS['scheduled'][0][1] && array( 456, 'tr_explicit', '5.00', 1 ) === $GLOBALS['scheduled'][0][2], 'an ask is scheduled for the record' );
+expect( 1 === count( $orders[123]->notes ) && false !== strpos( $orders[123]->notes[0], 'unconfirmed' ), 'the order says the refund is unconfirmed' );
+// An unanswered READ before the POST created nothing: an error, so the merchant sees it; no ask, no note.
+$GLOBALS['scheduled'] = array(); $orders[123]->notes = array(); $orders[456] = new WC_Order_Refund();
+$client->status = 'refunded'; $client->list_throws = new WCPOS\WooCommercePOS\MollieTerminal\Services\MollieUnansweredException( 'rate limited' ); $client->calls = array();
+$result = $provider->refund( $row, 456, '5.00' );
+expect( is_wp_error( $result ) && 'wcpos_provider_error' === $result->get_error_code() && array() === $GLOBALS['scheduled'] && array() === $orders[123]->notes && 2 === count( $client->calls ), 'an unanswered read before the POST is an error: nothing created, nothing scheduled' );
+$client->list_throws = null;
+// The scheduled ask: a fresh read of the record carries the saved attempt id and adopts the refund Mollie made.
+$fresh = new WC_Order_Refund(); $fresh->meta = array( RefundReconciler::META_ATTEMPT_ID => $attempt ); $orders[456] = $fresh;
 $client->refunds = array( array( 'id' => 're_lost', 'status' => 'refunded', 'metadata' => array( 'order_id' => '123', 'woo_refund_id' => '456', 'refund_attempt_id' => $attempt ) ) );
-$client->status = 'refunded';
-$client->calls = array();
-expect( array( 'status' => 'succeeded', 'provider_ref' => 're_lost' ) === $provider->refund( $row, 456, '5.00' ) && 2 === count( $client->calls ), 'the retry adopts the refund the lost response made and posts nothing' );
+$client->calls = array(); $orders[123]->notes = array();
+RefundReconciler::reask( 456, 'tr_explicit', '5.00', 1, $client );
+expect( 2 === count( $client->calls ) && 're_lost' === $orders[456]->meta[ RefundReconciler::META_MOLLIE_REFUND_ID ] && 1 === count( $orders[123]->notes ) && false !== strpos( $orders[123]->notes[0], 'confirmed with Mollie (refund re_lost, refunded)' ), 'the ask adopts the refund Mollie made and posts nothing' );
+// Mollie silent again: the ask waits another step, and gives up with a note after the last.
+$orders[456] = new WC_Order_Refund(); $orders[456]->meta = array( RefundReconciler::META_ATTEMPT_ID => $attempt );
+$client->refunds = array(); $client->status = new WCPOS\WooCommercePOS\MollieTerminal\Services\MollieUnansweredException( 'Response lost' );
+$GLOBALS['scheduled'] = array(); $orders[123]->notes = array();
+RefundReconciler::reask( 456, 'tr_explicit', '5.00', 2, $client );
+expect( array( 456, 'tr_explicit', '5.00', 3 ) === ( $GLOBALS['scheduled'][0][2] ?? null ), 'a silent Mollie schedules the next ask' );
+$GLOBALS['scheduled'] = array(); $orders[123]->notes = array();
+RefundReconciler::reask( 456, 'tr_explicit', '5.00', RefundReconciler::REASK_LIMIT, $client );
+expect( array() === $GLOBALS['scheduled'] && 1 === count( $orders[123]->notes ) && false !== strpos( end( $orders[123]->notes ), 'Check it in the Mollie dashboard' ), 'after the last ask staff are told to check the dashboard' );
 $client->refunds = array();
 $orders[456] = new WC_Order_Refund();
 $orders[456]->meta[ RefundReconciler::META_ATTEMPT_ID ] = 'attempt';
