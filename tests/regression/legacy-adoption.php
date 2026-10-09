@@ -92,7 +92,7 @@ expect( array(
 	array( 2, Settings::GATEWAY_ID, 'tr_qr', '12.50', 'EUR' ),
 	array( 8, Settings::GATEWAY_ID, 'tr_pending', '12.50', 'EUR' ),
 ) === $GLOBALS['adopted'], 'only open attempts on unpaid orders are adopted, by Mollie payment id; a QR attempt left open too' );
-expect( array( 1, 2, 3, 4, 5, 6, 7, 8 ) === Order_Lock::$locked, 'every snapshotted order is judged under the lock' );
+expect( array( 1, 2, 8 ) === Order_Lock::$locked, 'the lock is taken only for an order with an attempt to adopt; the rest are judged without it' );
 expect( 'tr_live' === $GLOBALS['orders'][1]->meta[ Legacy_Adoption::META_ADOPTED ] && 1 === $GLOBALS['orders'][1]->saves, 'the adopted reference is kept on the order' );
 expect( ! isset( $GLOBALS['orders'][7]->meta[ Legacy_Adoption::META_ADOPTED ] ), 'an already adopted attempt is not written again' );
 expect( array_unique( $GLOBALS['lookups'] ) === array( 'mollie' ), 'adoption is looked up under the provider family' );
@@ -156,7 +156,7 @@ $GLOBALS['orders'][50] = new WC_Order( 50, 'tr_render' );
 $row = Legacy_Adoption::adopt_order( 50 );
 expect( array( 'id' => 'row' ) === $row && array( array( 50, Settings::GATEWAY_ID, 'tr_render', '12.50', 'EUR' ) ) === $GLOBALS['adopted'] && array( 50 ) === Order_Lock::$locked, 'a single order is adopted on demand under the lock' );
 $GLOBALS['adopted_map'] = array( 'tr_render' => 'row' );
-expect( null === Legacy_Adoption::adopt_order( 50 ) && 1 === count( $GLOBALS['adopted'] ), 'an adopted order is left alone' );
+expect( null === Legacy_Adoption::adopt_order( 50 ) && 1 === count( $GLOBALS['adopted'] ) && array( 50 ) === Order_Lock::$locked, 'an adopted order is left alone without taking the lock again' );
 expect( null === Legacy_Adoption::adopt_order( 51 ), 'an unknown order is nothing' );
 
 // 7. Pro owns an adopted payment while its row is live (pending, authorized, captured): by the

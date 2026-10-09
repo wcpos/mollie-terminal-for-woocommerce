@@ -95,8 +95,11 @@ expect( array( array( 123, 'tr_left' ) ) === $GLOBALS['adopted'] && 1 === count(
 WCPOS\WooCommercePOS\Payments\Contract\Order_Lock::$refuse = array( 123 );
 $html = render( array( 'default_terminal_id' => 'term_1' ) );
 expect( array() === $GLOBALS['panel'] && false !== strpos( $html, 'Reload the page in a moment' ), 'a refused render-time adoption shows a wait, not Pro\'s panel' );
-WCPOS\WooCommercePOS\Payments\Contract\Order_Lock::$refuse = array();
+// With nothing to adopt the lock is not even asked for: a held lock on a plain order shows the panel.
 $GLOBALS['order']->meta = array();
+render( array( 'default_terminal_id' => 'term_1' ) );
+expect( 1 === count( $GLOBALS['panel'] ), 'a plain order renders Pro\'s panel without taking the lock' );
+WCPOS\WooCommercePOS\Payments\Contract\Order_Lock::$refuse = array();
 expect( array() === enqueue( array(), true ), 'nothing is enqueued for Pro\'s panel, even on the order-pay page' );
 
 $GLOBALS['wp'] = (object) array( 'query_vars' => array() );

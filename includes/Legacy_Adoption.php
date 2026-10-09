@@ -2,14 +2,15 @@
 namespace WCPOS\WooCommercePOS\MollieTerminal;
 
 /**
- * Fold attempts the old order-pay panel left mid-flight into Pro's ledger on upgrade: one pass
- * per plugin version, 25 orders per request, from a snapshot taken when the pass begins.
+ * Fold attempts the old order-pay panel left mid-flight into Pro's ledger on upgrade: one pass,
+ * 25 orders per request, from a snapshot of order ids taken when the pass begins, and again for
+ * one order whenever Pro's panel renders it.
  *
- * Only terminal (`pointofsale`) attempts are adopted: Pro's panel drives terminals, and a QR
- * attempt belongs to the old panel, which stays while QR methods are enabled. The action
+ * Only while the order-pay page is Pro's panel (no QR method enabled): under the QR carve-out the
+ * old panel owns its attempts. Any open attempt is adopted then, terminal or QR. The action
  * reference Pro's provider polls and cancels is the Mollie payment id itself, so an adopted
- * attempt needs nothing beyond the ledger row: Mollie expires an unpaid terminal payment on
- * its own and `Mollie_Server_Provider::fetch()` reads it directly.
+ * attempt needs nothing beyond the ledger row: Mollie expires an unpaid payment on its own and
+ * `Mollie_Server_Provider::fetch()` reads it directly. Pro owns the payment while its row is live.
  */
 final class Legacy_Adoption {
 	/** The version that introduced adoption; its pass runs once, and this marks it done. */
@@ -148,11 +149,22 @@ final class Legacy_Adoption {
 	 * @return array|null|\WP_Error The row, null when nothing applied, or a lock's refusal.
 	 */
 	public static function adopt_order( int $order_id ) {
+		// Nothing to adopt (no open attempt, or one Pro already has) is the common page load: answer
+		// without taking the order lock, which a till may hold for a moment. The lock is taken only
+		// when there is an attempt to adopt, and the copy read under it decides.
+		$order = wc_get_order( $order_id );
+		if ( ! $order ) {
+			return null;
+		}
+		$ref = self::action_ref( $order );
+		if ( '' === $ref || self::is_adopted( $ref ) || $order->is_paid() || ! $order->needs_payment() ) {
+			return null;
+		}
 		return self::with_order_lock(
 			$order_id,
 			static function () use ( $order_id ) {
-				// Read the order under the lock and judge that copy: an open terminal attempt on an
-				// order still waiting for payment, not adopted yet. A QR attempt, a final one, a paid
+				// Read the order under the lock and judge that copy: an open attempt (terminal or QR)
+				// on an order still waiting for payment, not adopted yet. A final attempt, a paid
 				// order or a leg a till recorded meanwhile is left alone.
 				$fresh = wc_get_order( $order_id );
 				if ( ! $fresh ) {
