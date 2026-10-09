@@ -297,7 +297,8 @@ try {
 	PaymentLock::with_lock( 38029, 'complete_payment', function () { expect( false, 'with_lock must not run its callback without the claim' ); } );
 	expect( false, 'with_lock must throw when the claim cannot be written' );
 } catch ( RuntimeException $e ) {
-	expect( false !== strpos( $e->getMessage(), 'already running' ), 'with_lock keeps its exception on a failed claim' );
+	// A database error is named apart from a held lock: callers that retry on a held lock must not retry forever on a broken database.
+	expect( $e instanceof WCPOS\WooCommercePOS\MollieTerminal\PaymentLockErrorException && false !== strpos( $e->getMessage(), 'database error' ), 'with_lock names a database error on the claim' );
 }
 $wpdb->insert_error = false;
 $recovered = $reconciler->reconcile( wc_get_order( 38029 ), $payment, 'poll' );

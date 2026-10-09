@@ -9,6 +9,9 @@ use RuntimeException;
 /** Thrown by with_lock() when another operation holds the order: not a failure of the work itself. */
 class PaymentLockHeldException extends RuntimeException {}
 
+/** Thrown by with_lock() when the database refused the claim: nobody is known to hold the order. */
+class PaymentLockErrorException extends RuntimeException {}
+
 class PaymentLock {
 	private static $held = array();
 
@@ -62,7 +65,11 @@ class PaymentLock {
 	}
 
 	public static function with_lock( int $order_id, string $operation, callable $callback, int $ttl = 30 ) {
-		if ( ! self::acquire( $order_id, $operation, $ttl ) ) {
+		$claim = self::claim( $order_id, $operation, $ttl );
+		if ( self::ERROR === $claim ) {
+			throw new PaymentLockErrorException( 'The Mollie Terminal order lock could not be claimed (database error).' );
+		}
+		if ( self::ACQUIRED !== $claim ) {
 			throw new PaymentLockHeldException( 'Another Mollie Terminal operation is already running for this order.' );
 		}
 		try {

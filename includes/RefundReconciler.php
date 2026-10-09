@@ -119,7 +119,9 @@ class RefundReconciler {
 		} catch ( PaymentLockHeldException $e ) {
 			// Another operation holds the order: not an answer from Mollie, so this try is not spent.
 			self::schedule_reask( (int) $refund_id, (string) $payment_id, (string) $amount, (int) $try );
-		} catch ( MollieRefundPostUnansweredException | MollieUnansweredException $e ) {
+		} catch ( MollieRefundPostUnansweredException | MollieUnansweredException | PaymentLockErrorException $e ) {
+			// Mollie silent, or the database refusing the lock: a try is spent, so a persistent fault
+			// ends with the dashboard note rather than a reschedule forever.
 			if ( (int) $try >= self::REASK_LIMIT ) {
 				Logger::log( 'Mollie Terminal gave up confirming a refund.', array( 'refund_id' => (int) $refund_id, 'payment_id' => $payment_id ), 'error' );
 				$order->add_order_note( sprintf( 'Mollie Terminal: the refund of %s could not be confirmed with Mollie. Check it in the Mollie dashboard before refunding again.', $amount ) );

@@ -125,6 +125,11 @@ $wpdb->rows['mtfwc_lock_order_123_refund'] = json_encode( array( 'token' => 'oth
 RefundReconciler::reask( 456, 'tr_explicit', '5.00', 2, $client );
 expect( array( 456, 'tr_explicit', '5.00', 2 ) === ( $GLOBALS['scheduled'][0][2] ?? null ) && array() === $orders[123]->notes, 'a held order lock reschedules the same try without a note' );
 unset( $wpdb->rows['mtfwc_lock_order_123_refund'] );
+// The database refusing the lock spends a try, so a persistent fault ends with the dashboard note.
+$GLOBALS['scheduled'] = array(); $orders[123]->notes = array(); $wpdb->insert_error = true;
+RefundReconciler::reask( 456, 'tr_explicit', '5.00', 2, $client );
+expect( array( 456, 'tr_explicit', '5.00', 3 ) === ( $GLOBALS['scheduled'][0][2] ?? null ) && array() === $orders[123]->notes, 'a database error on the lock spends the try' );
+$wpdb->insert_error = false;
 // Mollie answers the re-ask with a refusal: no refund was made, the note says so.
 $orders[456] = new WC_Order_Refund(); $orders[456]->meta = array( RefundReconciler::META_ATTEMPT_ID => $attempt );
 $client->status = new RuntimeException( 'The refund amount exceeds the refundable amount' );
