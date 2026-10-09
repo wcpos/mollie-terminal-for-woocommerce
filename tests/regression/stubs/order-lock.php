@@ -7,11 +7,14 @@ if ( ! class_exists( Order_Lock::class ) ) {
 	class Order_Lock {
 		public static $locked = array();
 		public static $refuse = array();
+		/** True while a callback runs under the lock: a fake order store can answer the fresh copy then. */
+		public static $held = false;
 		public static function instance() { return new self(); }
 		public function with_lock( $order_id, $callback ) {
 			if ( in_array( $order_id, self::$refuse, true ) ) { return new \WP_Error( 'wcpos_payment_locked', 'busy' ); }
 			self::$locked[] = $order_id;
-			return $callback();
+			self::$held = true;
+			try { return $callback(); } finally { self::$held = false; }
 		}
 	}
 }

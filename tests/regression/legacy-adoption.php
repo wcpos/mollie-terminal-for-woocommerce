@@ -23,6 +23,14 @@ use WCPOS\WooCommercePOS\MollieTerminal\PaymentLock;
 use WCPOS\WooCommercePOS\MollieTerminal\Settings;
 use WCPOS\WooCommercePOS\Payments\Contract\Order_Lock;
 
+// The Pro stub's wc_get_order() reads $GLOBALS['orders']; this script answers the fresh copy only under the lock.
+$GLOBALS['orders'] = new class() implements ArrayAccess {
+	public function offsetExists( $id ): bool { return isset( $GLOBALS['by_id'][ $id ] ) || isset( $GLOBALS['fresh'][ $id ] ); }
+	#[\ReturnTypeWillChange]
+	public function offsetGet( $id ) { return ( Order_Lock::$held ? ( $GLOBALS['fresh'][ $id ] ?? $GLOBALS['by_id'][ $id ] ?? null ) : ( $GLOBALS['by_id'][ $id ] ?? null ) ); }
+	public function offsetSet( $id, $value ): void { $GLOBALS['by_id'][ $id ] = $value; }
+	public function offsetUnset( $id ): void { unset( $GLOBALS['by_id'][ $id ] ); }
+};
 class SilentLoggerForAdoption { public function log( $level, $message, $context = array() ) {} }
 function wc_get_logger() { return new SilentLoggerForAdoption(); }
 function wp_json_encode( $value ) { return json_encode( $value ); }
@@ -60,8 +68,9 @@ function reset_state( array $page, array $fresh = array(), array $settings = arr
 	$GLOBALS['page'] = $page;
 	$by_id = array();
 	foreach ( $page as $o ) { $by_id[ $o->get_id() ] = $o; }
-	// The order read under the lock: the fresh copy where one is given, the snapshot's otherwise.
-	$GLOBALS['orders'] = $fresh + $by_id;
+	// The order read under the lock is the fresh copy where one is given; outside it, the snapshot's.
+	$GLOBALS['by_id'] = $by_id;
+	$GLOBALS['fresh'] = $fresh;
 	$GLOBALS['adopted'] = array();
 	$GLOBALS['adopted_map'] = array();
 	$GLOBALS['queries'] = array();
@@ -110,13 +119,13 @@ reset_state(
 	array( 10 => new WC_Order( 10, 'tr_a', 'pointofsale', 'open', true ), 11 => new WC_Order( 11, 'tr_b2', 'pointofsale', 'canceled' ) )
 );
 Legacy_Adoption::upgrade();
-expect( array() === $GLOBALS['adopted'], 'the order read under the lock decides: paid meanwhile, or a finished retried attempt, is not adopted' );
+expect( array() === $GLOBALS['adopted'] && array( 10, 11 ) === Order_Lock::$locked, 'the order read under the lock decides: paid meanwhile, or a finished retried attempt, is not adopted, though the first read found an attempt' );
 expect( Legacy_Adoption::VERSION === $GLOBALS['options']['mtfwc_adoption_version'], 'skipped entries leave the queue' );
 
 // 3. A full page leaves the remainder queued; the next request drains it from the same snapshot.
-$orders = array();
-for ( $i = 100; $i < 126; $i++ ) { $orders[] = new WC_Order( $i, 'tr_' . $i ); }
-reset_state( $orders );
+$batch = array(); // not $orders: the script's order store lives in $GLOBALS['orders']
+for ( $i = 100; $i < 126; $i++ ) { $batch[] = new WC_Order( $i, 'tr_' . $i ); }
+reset_state( $batch );
 Legacy_Adoption::upgrade();
 expect( 25 === count( $GLOBALS['adopted'] ) && array( 125 => 1 ) === $GLOBALS['options']['mtfwc_adoption_queue'], 'a request works one page and leaves the remainder queued' );
 expect( ! isset( $GLOBALS['options']['mtfwc_adoption_version'] ), 'the pass is not finished while entries remain' );
