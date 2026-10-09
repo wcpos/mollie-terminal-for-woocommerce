@@ -11,9 +11,12 @@ use RuntimeException;
 class MollieRefundPostUnansweredException extends RuntimeException {
 	/** @var string */
 	public $attempt_id;
+	/** @var string The Mollie payment the refund was posted against, as the reconciler resolved it. */
+	public $payment_id;
 
-	public function __construct( string $message, string $attempt_id ) {
+	public function __construct( string $message, string $attempt_id, string $payment_id = '' ) {
 		parent::__construct( $message );
 		$this->attempt_id = $attempt_id;
+		$this->payment_id = $payment_id;
 	}
 }

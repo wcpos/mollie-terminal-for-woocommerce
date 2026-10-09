@@ -6,6 +6,9 @@ use RuntimeException;
 // INSERT IGNORE claims the options table's unique option_name atomically;
 // transients can be cache-only and the add-option API upserts existing rows.
 // Compare-and-delete keeps stale holders from deleting a replacement claim.
+/** Thrown by with_lock() when another operation holds the order: not a failure of the work itself. */
+class PaymentLockHeldException extends RuntimeException {}
+
 class PaymentLock {
 	private static $held = array();
 
@@ -60,7 +63,7 @@ class PaymentLock {
 
 	public static function with_lock( int $order_id, string $operation, callable $callback, int $ttl = 30 ) {
 		if ( ! self::acquire( $order_id, $operation, $ttl ) ) {
-			throw new RuntimeException( 'Another Mollie Terminal operation is already running for this order.' );
+			throw new PaymentLockHeldException( 'Another Mollie Terminal operation is already running for this order.' );
 		}
 		try {
 			return $callback();

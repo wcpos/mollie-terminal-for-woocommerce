@@ -163,7 +163,7 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 			// order says so, and the reconciler's own ask finds the refund Mollie made by its attempt
 			// id (the Idempotency-Key) or makes it under that same id.
 			Logger::log( 'Mollie did not answer a refund POST; the refund record stays pending and is checked again.', array( 'refund_id' => $refund_id, 'message' => $e->getMessage() ), 'warning' );
-			RefundReconciler::unanswered_post( $order, $refund_id, $payment_id, $amount );
+			RefundReconciler::unanswered_post( $order, $refund_id, '' !== $e->payment_id ? $e->payment_id : $payment_id, $amount );
 			return array( 'status' => 'pending', 'provider_ref' => null );
 		} catch ( RuntimeException | InvalidArgumentException $e ) {
 			// A read Mollie did not answer, or a refusal: nothing was created, and the merchant sees it.

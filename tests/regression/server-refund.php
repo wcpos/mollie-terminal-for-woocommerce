@@ -117,6 +117,25 @@ $client->refunds = array( array( 'id' => 're_lost', 'status' => 'refunded', 'met
 $client->calls = array(); $orders[123]->notes = array();
 RefundReconciler::reask( 456, 'tr_explicit', '5.00', 1, $client );
 expect( 2 === count( $client->calls ) && 're_lost' === $orders[456]->meta[ RefundReconciler::META_MOLLIE_REFUND_ID ] && 1 === count( $orders[123]->notes ) && false !== strpos( $orders[123]->notes[0], 'confirmed with Mollie (refund re_lost, refunded)' ), 'the ask adopts the refund Mollie made and posts nothing' );
+// Another operation holds the order when the ask fires: the try is not spent, the ask is rescheduled.
+$client->refunds = array();
+$orders[456] = new WC_Order_Refund(); $orders[456]->meta = array( RefundReconciler::META_ATTEMPT_ID => $attempt );
+$GLOBALS['scheduled'] = array(); $orders[123]->notes = array();
+$wpdb->rows['mtfwc_lock_order_123_refund'] = json_encode( array( 'token' => 'other', 'expires_at' => time() + 60 ) );
+RefundReconciler::reask( 456, 'tr_explicit', '5.00', 2, $client );
+expect( array( 456, 'tr_explicit', '5.00', 2 ) === ( $GLOBALS['scheduled'][0][2] ?? null ) && array() === $orders[123]->notes, 'a held order lock reschedules the same try without a note' );
+unset( $wpdb->rows['mtfwc_lock_order_123_refund'] );
+// Mollie answers the re-ask with a refusal: no refund was made, the note says so.
+$orders[456] = new WC_Order_Refund(); $orders[456]->meta = array( RefundReconciler::META_ATTEMPT_ID => $attempt );
+$client->status = new RuntimeException( 'The refund amount exceeds the refundable amount' );
+$GLOBALS['scheduled'] = array(); $orders[123]->notes = array();
+RefundReconciler::reask( 456, 'tr_explicit', '5.00', 2, $client );
+expect( array() === $GLOBALS['scheduled'] && 1 === count( $orders[123]->notes ) && false !== strpos( $orders[123]->notes[0], 'no refund was made' ), 'a refusal on the re-ask is noted as a refusal, not an unconfirmed refund' );
+// Mollie reports the refund failed: the note says failed, not confirmed.
+$orders[456] = new WC_Order_Refund(); $orders[456]->meta = array( RefundReconciler::META_ATTEMPT_ID => $attempt );
+$client->status = 'failed'; $orders[123]->notes = array();
+RefundReconciler::reask( 456, 'tr_explicit', '5.00', 2, $client );
+expect( 1 === count( $orders[123]->notes ) && false !== strpos( $orders[123]->notes[0], 'as failed' ), 'a failed refund is noted as failed' );
 // Mollie silent again: the ask waits another step, and gives up with a note after the last.
 $orders[456] = new WC_Order_Refund(); $orders[456]->meta = array( RefundReconciler::META_ATTEMPT_ID => $attempt );
 $client->refunds = array(); $client->status = new WCPOS\WooCommercePOS\MollieTerminal\Services\MollieUnansweredException( 'Response lost' );
