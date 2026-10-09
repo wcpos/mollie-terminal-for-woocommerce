@@ -4,7 +4,6 @@ namespace WCPOS\WooCommercePOS\MollieTerminal;
 use WC_Payment_Gateway;
 use WCPOS\WooCommercePOS\MollieTerminal\Server\Mollie_Server_Provider;
 use WCPOS\WooCommercePOS\MollieTerminal\Server\Pos_Reader_Settings;
-use WCPOS\WooCommercePOS\MollieTerminal\Server\Registration;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieApiClient;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MolliePaymentService;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\TerminalService;
@@ -28,22 +27,26 @@ class Gateway extends WC_Payment_Gateway {
 
 	public static function register_gateway( array $methods ): array { $methods[] = __CLASS__; return $methods; }
 
+	/**
+	 * Offered on POS requests and on the order-pay page a POS user opens, never on the shop's
+	 * checkout: terminal extensions are Pro-only at 2.0 and the POS is their only surface. The
+	 * parent is not consulted, so a site that once saved the old web-checkout switch keeps nothing.
+	 * On a POS request Free's own gateway filter applies the POS switch; on the plain order-pay
+	 * page this method applies it, so the switch under POS → Settings → Checkout is the only one.
+	 */
+	public function is_available() {
+		$settings = new Settings();
+		if ( '' === $settings->api_key() ) {
+			return false;
+		}
+		if ( function_exists( 'woocommerce_pos_request' ) && woocommerce_pos_request() ) {
+			return true;
+		}
+		return function_exists( 'is_checkout_pay_page' ) && is_checkout_pay_page() && current_user_can( 'access_woocommerce_pos' ) && $settings->enabled_for_pos();
+	}
+
 	public function init_form_fields(): void {
 		$this->form_fields = array(
-			'enabled' => array(
-				'title'       => __( 'Enable/Disable', 'mollie-terminal-for-woocommerce' ),
-				'type'        => 'checkbox',
-				// This switch governs the online store only. WooCommerce POS enables
-				// the gateway from POS → Settings → Checkout, whether or not it is
-				// enabled here; a bare "for checkout/POS" implied the POS needed it.
-				'label'       => sprintf(
-					/* translators: %s: link to WooCommerce POS. */
-					__( 'Enable Mollie Terminal for web checkout (not necessary for %s)', 'mollie-terminal-for-woocommerce' ),
-					'<a href="https://wcpos.com" target="_blank">WooCommerce POS</a>'
-				),
-				'description' => __( 'This enables the gateway for online store checkout. WooCommerce POS uses this gateway once it is enabled under POS → Settings → Checkout, whether or not it is enabled here.', 'mollie-terminal-for-woocommerce' ),
-				'default'     => 'no',
-			),
 			'title' => array( 'title' => __( 'Title', 'mollie-terminal-for-woocommerce' ), 'type' => 'text', 'default' => __( 'Mollie Terminal', 'mollie-terminal-for-woocommerce' ) ),
 			'description' => array( 'title' => __( 'Description', 'mollie-terminal-for-woocommerce' ), 'type' => 'textarea', 'default' => __( 'Pay in person using Mollie Terminal.', 'mollie-terminal-for-woocommerce' ) ),
 			'mode' => array( 'title' => __( 'Mode', 'mollie-terminal-for-woocommerce' ), 'type' => 'select', 'default' => 'test', 'options' => array( 'test' => __( 'Test', 'mollie-terminal-for-woocommerce' ), 'live' => __( 'Live', 'mollie-terminal-for-woocommerce' ) ) ),
@@ -90,10 +93,8 @@ class Gateway extends WC_Payment_Gateway {
 			'desc_tip'    => true,
 			'default'     => 'no',
 		);
-		if ( Registration::pro_supported() ) {
-			foreach ( array( 'default_terminal_id', 'enabled_terminals', 'lock_terminal' ) as $field ) {
-				if ( isset( $this->form_fields[ $field ] ) ) { $this->form_fields[ $field ]['description'] .= ' ' . __( 'WooCommerce POS 1.11 reads this for the checkout terminal tile.', 'mollie-terminal-for-woocommerce' ); }
-			}
+		foreach ( array( 'default_terminal_id', 'enabled_terminals', 'lock_terminal' ) as $field ) {
+			if ( isset( $this->form_fields[ $field ] ) ) { $this->form_fields[ $field ]['description'] .= ' ' . __( 'WooCommerce POS reads this for the checkout terminal tile.', 'mollie-terminal-for-woocommerce' ); }
 		}
 	}
 
@@ -199,7 +200,7 @@ class Gateway extends WC_Payment_Gateway {
 		$this->row( __( 'API key source', 'mollie-terminal-for-woocommerce' ), $key_source . ' — ' . $key_status );
 		$this->row( __( 'Selected default terminal', 'mollie-terminal-for-woocommerce' ), $settings->default_terminal_id() );
 		$this->row( __( 'Webhook URL (sent automatically on every payment)', 'mollie-terminal-for-woocommerce' ), $settings->webhook_url() );
-		$this->row( __( 'WooCommerce POS checkout', 'mollie-terminal-for-woocommerce' ), Registration::pro_supported() ? Mollie_Server_Provider::webhook_url() : sprintf( __( 'Requires WooCommerce POS Pro %s or newer (legacy checkout only)', 'mollie-terminal-for-woocommerce' ), Registration::REQUIRED_PRO_VERSION ) );
+		$this->row( __( 'WooCommerce POS checkout', 'mollie-terminal-for-woocommerce' ), Mollie_Server_Provider::webhook_url() );
 		echo '<tr><th>' . esc_html__( 'Payment logs', 'mollie-terminal-for-woocommerce' ) . '</th><td>';
 		printf(
 			/* translators: %s: link to the WooCommerce status logs screen. */
@@ -358,7 +359,6 @@ class Gateway extends WC_Payment_Gateway {
 	}
 
 	public function mirror_pos_reader_settings(): void {
-		if ( ! Registration::pro_supported() ) { return; }
 		Pos_Reader_Settings::mirror( new Settings() );
 		if ( class_exists( '\\WCPOS\\WooCommercePOSPro\\Payments\\Server\\Reader_Curation' ) ) {
 			\WCPOS\WooCommercePOSPro\Payments\Server\Reader_Curation::forget( Settings::GATEWAY_ID );
@@ -375,6 +375,10 @@ class Gateway extends WC_Payment_Gateway {
 	private function row( string $label, string $value ): void { echo '<tr><th>' . esc_html( $label ) . '</th><td><code>' . esc_html( $value ) . '</code></td></tr>'; }
 	public function enqueue_admin_scripts(): void { wp_enqueue_script( 'mtfwc-admin', MTFWC_PLUGIN_URL . 'assets/js/admin.js', array( 'jquery' ), MTFWC_VERSION, true ); }
 	public function enqueue_payment_scripts(): void {
+		// The panel exists on the order-pay page only; the shop's checkout never offers the gateway.
+		if ( ! function_exists( 'is_checkout_pay_page' ) || ! is_checkout_pay_page() ) {
+			return;
+		}
 		wp_enqueue_script( 'mtfwc-payment', MTFWC_PLUGIN_URL . 'assets/js/payment.js', array(), MTFWC_VERSION, true );
 		wp_enqueue_style( 'mtfwc-payment', MTFWC_PLUGIN_URL . 'assets/css/payment.css', array(), MTFWC_VERSION );
 		wp_localize_script(

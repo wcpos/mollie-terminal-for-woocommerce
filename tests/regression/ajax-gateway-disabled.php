@@ -1,8 +1,9 @@
 <?php
 require_once __DIR__ . '/support/fake-wpdb.php';
-// The checkout AJAX actions must refuse to act when the merchant has switched
-// the gateway off in WooCommerce → Payments, even for an otherwise valid
-// order token (issue #12).
+// The checkout AJAX actions must refuse to act when the merchant has the gateway
+// switched off under POS → Settings → Checkout, even for an otherwise valid order
+// token (issue #12). That is the only switch: the WooCommerce → Payments checkbox
+// governed the shop's checkout, which no longer offers the gateway.
 function expect( $condition, $message = 'expectation failed' ) { if ( ! $condition ) { fwrite( STDERR, $message . "\n" ); exit( 1 ); } }
 
 $options = array();
@@ -77,7 +78,7 @@ function call_action( string $action, array $settings, array $post = array() ): 
 	exit( 1 );
 }
 
-$disabled = array( 'enabled' => 'no', 'qr_methods' => array( 'ideal' ) );
+$disabled = array( 'qr_methods' => array( 'ideal' ) );
 foreach ( array( 'mtfwc_start_payment', 'mtfwc_list_terminals' ) as $action ) {
 	$response = call_action( $action, $disabled, array( 'channel' => 'qr', 'qr_method' => 'ideal' ) );
 	expect( 403 === $response->status, "$action must be refused while the gateway is disabled" );
@@ -93,14 +94,11 @@ foreach ( array( 'mtfwc_poll_payment', 'mtfwc_cancel_payment' ) as $action ) {
 	expect( 'idle' === ( $response->data['status'] ?? '' ), "$action should report the order's payment state as usual" );
 }
 
-// A missing 'enabled' option (never saved) counts as disabled, matching the
-// gateway's own default.
+// A gateway never configured in POS counts as disabled.
 expect( 403 === call_action( 'mtfwc_start_payment', array() )->status, 'an unsaved gateway must be treated as disabled' );
 
-// The WooCommerce → Payments checkbox governs the online store only. A POS-only
-// merchant leaves it off and enables the gateway under POS → Settings →
-// Checkout instead, so that switch alone must let payments start and
-// terminals list (the 0.5.1 guard ignored it and locked those shops out).
+// The POS switch alone lets payments start and terminals list (the 0.5.1 guard
+// looked only at the WooCommerce checkbox and locked every POS-only shop out).
 $pos_settings = array( 'default_gateway' => 'pos_cash', 'gateways' => array( 'mollie_terminal_for_woocommerce' => array( 'enabled' => true, 'order' => 2 ) ) );
 $pos_only = call_action( 'mtfwc_start_payment', $disabled, array( 'channel' => 'qr', 'qr_method' => 'bancontact' ) );
 expect( 400 === $pos_only->status, 'the POS switch alone must let start_payment past the gateway guard' );
@@ -116,9 +114,15 @@ $pos_settings = 'not-an-array';
 expect( 403 === call_action( 'mtfwc_start_payment', $disabled )->status, 'a non-array POS settings result must not enable the gateway' );
 $pos_settings = array();
 
-// With the gateway enabled the request proceeds past the guard: the QR method
+// The old web-checkout switch a site saved before the upgrade counts for nothing:
+// the shop's checkout no longer offers the gateway, and POS alone decides.
+$web_only = call_action( 'mtfwc_start_payment', array( 'enabled' => 'yes' ), array( 'channel' => 'qr', 'qr_method' => 'ideal' ) );
+expect( 403 === $web_only->status, 'the saved web-checkout switch must not enable the gateway' );
+
+// With the POS switch on the request proceeds past the guard: the QR method
 // check is the next gate, so a disabled QR method now yields 400, not 403.
-$enabled = call_action( 'mtfwc_start_payment', array( 'enabled' => 'yes' ), array( 'channel' => 'qr', 'qr_method' => 'ideal' ) );
+$pos_settings = array( 'gateways' => array( 'mollie_terminal_for_woocommerce' => array( 'enabled' => true ) ) );
+$enabled = call_action( 'mtfwc_start_payment', array(), array( 'channel' => 'qr', 'qr_method' => 'ideal' ) );
 expect( 400 === $enabled->status, 'an enabled gateway must let the request through to the next check' );
 
 echo "ajax-gateway-disabled ok\n";
