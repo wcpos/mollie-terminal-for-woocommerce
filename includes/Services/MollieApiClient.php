@@ -7,6 +7,7 @@ use WCPOS\WooCommercePOS\MollieTerminal\Logger;
 require_once __DIR__ . '/MollieUnansweredException.php'; // The client's own exceptions, loaded with it.
 require_once __DIR__ . '/MollieNotFoundException.php';
 require_once __DIR__ . '/MollieRefundPostUnansweredException.php';
+require_once __DIR__ . '/MollieRefundRefusedException.php';
 
 class MollieApiClient {
 	private const BASE_URL = 'https://api.mollie.com/v2';

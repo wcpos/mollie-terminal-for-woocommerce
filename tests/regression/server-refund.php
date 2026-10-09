@@ -136,6 +136,18 @@ $client->status = new RuntimeException( 'The refund amount exceeds the refundabl
 $GLOBALS['scheduled'] = array(); $orders[123]->notes = array();
 RefundReconciler::reask( 456, 'tr_explicit', '5.00', 2, $client );
 expect( array() === $GLOBALS['scheduled'] && 1 === count( $orders[123]->notes ) && false !== strpos( $orders[123]->notes[0], 'no refund was made' ), 'a refusal on the re-ask is noted as a refusal, not an unconfirmed refund' );
+// A failed read on the re-ask (a key Mollie rejects) proves nothing about the first POST: unconfirmed, never "no refund".
+$orders[456] = new WC_Order_Refund(); $orders[456]->meta = array( RefundReconciler::META_ATTEMPT_ID => $attempt );
+$client->status = 'refunded'; $client->list_throws = new RuntimeException( 'Missing authentication, or failed to authenticate' );
+$GLOBALS['scheduled'] = array(); $orders[123]->notes = array();
+RefundReconciler::reask( 456, 'tr_explicit', '5.00', 2, $client );
+expect( array() === $GLOBALS['scheduled'] && 1 === count( $orders[123]->notes ) && false !== strpos( $orders[123]->notes[0], 'could not be confirmed' ) && false === strpos( $orders[123]->notes[0], 'no refund was made' ), 'a failed read on the re-ask is unconfirmed, not a refusal' );
+// An amount that no longer fits (staff refunded in the dashboard meanwhile) is caught, noted as unconfirmed, and never escapes the cron.
+$client->list_throws = new InvalidArgumentException( 'Refund amount exceeds the remaining balance' );
+$orders[123]->notes = array();
+RefundReconciler::reask( 456, 'tr_explicit', '5.00', 2, $client );
+expect( 1 === count( $orders[123]->notes ) && false !== strpos( $orders[123]->notes[0], 'could not be confirmed' ), 'an amount error is caught and noted as unconfirmed' );
+$client->list_throws = null;
 // Mollie reports the refund failed: the note says failed, not confirmed.
 $orders[456] = new WC_Order_Refund(); $orders[456]->meta = array( RefundReconciler::META_ATTEMPT_ID => $attempt );
 $client->status = 'failed'; $orders[123]->notes = array();

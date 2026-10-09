@@ -4,6 +4,7 @@ namespace WCPOS\WooCommercePOS\MollieTerminal;
 use RuntimeException;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieApiClient;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieRefundPostUnansweredException;
+use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieRefundRefusedException;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieUnansweredException;
 use WCPOS\WooCommercePOS\MollieTerminal\Utils\Money;
 
@@ -58,6 +59,10 @@ class RefundReconciler {
 				// Only the POST itself: an unanswered read before it created nothing and stays an
 				// error. The refund may exist now; the caller keeps the record and asks again.
 				throw new MollieRefundPostUnansweredException( $e->getMessage(), (string) $attempt_id, (string) $payment_id );
+			} catch ( RuntimeException $e ) {
+				// Mollie answered the POST with a refusal: no refund was made. Named apart from a
+				// failed read, which proves nothing about a refund an earlier POST may have made.
+				throw new MollieRefundRefusedException( $e->getMessage() );
 			}
 			return $this->store_refund( $woo_refund, $refund, $amount );
 		} );
@@ -129,10 +134,17 @@ class RefundReconciler {
 				return;
 			}
 			self::schedule_reask( (int) $refund_id, (string) $payment_id, (string) $amount, (int) $try + 1 );
-		} catch ( RuntimeException $e ) {
-			// Mollie answered, and refused: no refund was made. The record stands for staff to act on.
+		} catch ( MollieRefundRefusedException $e ) {
+			// Mollie answered the POST, and refused: no refund was made. The record stands for staff.
 			Logger::log( 'Mollie refused a refund on the re-ask: ' . $e->getMessage(), array( 'refund_id' => (int) $refund_id, 'payment_id' => $payment_id ), 'error' );
 			$order->add_order_note( sprintf( 'Mollie Terminal: Mollie refused the refund of %s (%s); no refund was made. The WooCommerce refund record stands; refund it in the Mollie dashboard or delete the record.', $amount, $e->getMessage() ) );
+			$order->save();
+		} catch ( \Throwable $e ) {
+			// A failed read (a key Mollie rejects, a payment it cannot show), an amount that no longer
+			// fits, or anything else: proves nothing about a refund the first POST may have made.
+			// Unconfirmed, never "no refund was made"; staff check before refunding again.
+			Logger::log( 'Mollie Terminal could not confirm a refund: ' . $e->getMessage(), array( 'refund_id' => (int) $refund_id, 'payment_id' => $payment_id ), 'error' );
+			$order->add_order_note( sprintf( 'Mollie Terminal: the refund of %s could not be confirmed with Mollie (%s). Check it in the Mollie dashboard before refunding again.', $amount, $e->getMessage() ) );
 			$order->save();
 		}
 	}
