@@ -30,6 +30,12 @@ class RefundHandler {
 			}
 			if ( null === $refund ) { return new \WP_Error( 'mtfwc_refund_not_found', __( 'No matching WooCommerce refund found.', 'mollie-terminal-for-woocommerce' ) ); }
 			return ( new RefundReconciler( $this->client ) )->refund( $order, $refund, (string) $amount, $reason, '' === $payment_id ? null : $payment_id );
+		} catch ( \WCPOS\WooCommercePOS\MollieTerminal\Services\MollieRefundPostUnansweredException $e ) {
+			// The POST went unanswered: the record stands (an error would make WooCommerce delete it
+			// and a retry refund again); the reconciler noted it on the order and asks Mollie again.
+			Logger::log( 'Mollie refund POST unanswered; the record stays and is checked again.', array(), 'warning' );
+			RefundReconciler::unanswered_post( $order, (int) $refund->get_id(), $e->payment_id, (string) $amount );
+			return true;
 		} catch ( Exception $e ) { Logger::log( 'Mollie refund failed: ' . $e->getMessage(), array(), 'error' ); return new \WP_Error( 'mtfwc_refund_failed', $e->getMessage() ); }
 	}
 }

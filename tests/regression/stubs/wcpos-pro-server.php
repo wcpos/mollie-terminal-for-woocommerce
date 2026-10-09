@@ -55,6 +55,7 @@ namespace WCPOS\WooCommercePOSPro\Payments\Server {
 			public function refund( array $row, int $refund_id, string $amount ) { return $this->unsupported(); }
 			public function verify_webhook( \WP_REST_Request $request ) { return $this->unsupported(); }
 			protected function event( array $row, string $level, string $message ): array { return Event_Log::append( $row, $level, $message ); }
+			protected function indeterminate( string $code, string $message ): \WP_Error { return new \WP_Error( $code, $message, array( 'indeterminate' => true, 'status' => 502 ) ); }
 			private function unsupported(): \WP_Error { return new \WP_Error( 'wcpos_capture_mode_unsupported', __( 'This payment provider does not support that operation.', 'woocommerce-pos-pro' ), array( 'status' => 501 ) ); }
 		}
 	}

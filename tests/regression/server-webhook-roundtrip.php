@@ -3,6 +3,7 @@ function expect( $condition, $message = 'expectation failed' ) { if ( ! $conditi
 require_once __DIR__ . '/stubs/wcpos-pro-server.php';
 require_once __DIR__ . '/../../includes/Settings.php';
 require_once __DIR__ . '/../../includes/Services/MollieApiClient.php';
+require_once __DIR__ . '/../../includes/Services/MollieNotFoundException.php';
 require_once __DIR__ . '/../../includes/Services/TerminalService.php';
 expect( file_exists( __DIR__ . '/../../includes/Server/Mollie_Server_Provider.php' ), 'server adapter is missing' );
 require_once __DIR__ . '/../../includes/Server/Mollie_Server_Provider.php';
@@ -56,4 +57,7 @@ foreach ( array( array(), array( 'wcpos_payment_id' => 'not-a-uuid' ) ) as $meta
 $client->payment = new RuntimeException( 'offline' );
 $r = $provider->verify_webhook( $request );
 expect( 'wcpos_provider_error' === $r->get_error_code() && 502 === $r->get_error_data()['status'], 'transport failure' );
+$client->payment = new WCPOS\WooCommercePOS\MollieTerminal\Services\MollieNotFoundException( 'No payment exists with token tr_x.' );
+$r = $provider->verify_webhook( $request );
+expect( 'mollie_webhook_unknown_payment' === $r->get_error_code() && 404 === $r->get_error_data()['status'], 'a payment this key cannot see is an unknown payment, not a provider failure' );
 echo "server-webhook-roundtrip ok\n";

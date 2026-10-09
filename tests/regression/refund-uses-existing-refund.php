@@ -60,7 +60,7 @@ class FakeRefundClient extends MollieApiClient {
 	public function __construct() {}
 	public function get_payment( string $payment_id, array $include = array() ): array { $this->calls++; return array( 'amount' => array( 'value' => '30.00', 'currency' => 'EUR' ) ); }
 	public function list_refunds( string $payment_id ): array { $this->calls++; return array(); }
-	public function create_refund( string $payment_id, array $payload ): array { $this->calls++; $this->payload = $payload; return array( 'id' => 're_new', 'status' => 'queued' ); }
+	public function create_refund( string $payment_id, array $payload, string $idempotency_key = '' ): array { $this->calls++; $this->payload = $payload; return array( 'id' => 're_new', 'status' => 'queued' ); }
 }
 
 // Newest first, as returned by WooCommerce; decimal representations may differ.

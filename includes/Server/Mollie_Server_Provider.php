@@ -3,9 +3,13 @@ namespace WCPOS\WooCommercePOS\MollieTerminal\Server;
 
 use InvalidArgumentException;
 use RuntimeException;
+use WCPOS\WooCommercePOS\MollieTerminal\Logger;
 use WCPOS\WooCommercePOS\MollieTerminal\RefundReconciler;
 use WCPOS\WooCommercePOS\MollieTerminal\Settings;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieApiClient;
+use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieNotFoundException;
+use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieRefundPostUnansweredException;
+use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieUnansweredException;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\TerminalService;
 use WCPOS\WooCommercePOS\MollieTerminal\Utils\Money;
 
@@ -67,6 +71,10 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 			);
 			$payment = $this->client->create_payment( $payload, array(), $row['id'] );
 			return array( 'ref' => $payment['id'], 'expires_at' => $payment['expiresAt'] ?? null );
+		} catch ( MollieUnansweredException $e ) {
+			// The payment may exist: Free keeps the row pending, and the replay carries the same
+			// Idempotency-Key (the row id), so Mollie hands back the payment the lost response made.
+			return $this->indeterminate( 'mollie_unanswered', $e->getMessage() );
 		} catch ( RuntimeException | InvalidArgumentException $e ) {
 			return self::provider_error( $e->getMessage() );
 		}
@@ -75,6 +83,8 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 	public function fetch( string $ref ) {
 		try {
 			return self::normalize( $this->client->get_payment( $ref ) );
+		} catch ( MollieUnansweredException $e ) {
+			return $this->indeterminate( 'mollie_unanswered', $e->getMessage() ); // Nothing observed; the next poll asks again.
 		} catch ( RuntimeException | InvalidArgumentException $e ) {
 			return self::provider_error( $e->getMessage() );
 		}
@@ -134,15 +144,29 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 
 	public function refund( array $row, int $refund_id, string $amount ) {
 		try {
-			$order = wc_get_order( (int) $row['order_id'] );
 			$refund = wc_get_order( $refund_id );
+			// A historical webview row (refunded by its transaction reference) names no order; the
+			// refund record does.
+			$order = wc_get_order( (int) ( $row['order_id'] ?? ( $refund ? $refund->get_parent_id() : 0 ) ) );
 			if ( ! $order || ! $refund ) { return new \WP_Error( 'wcpos_refund_not_found', __( 'Order or refund not found.', 'mollie-terminal-for-woocommerce' ), array( 'status' => 404 ) ); }
-			$payment_id = $row['provider_refs']['action'] ?? '';
+			// The leg's own action, or, for a historical webview row, the Mollie payment id Free kept as
+			// the transaction reference.
+			$payment_id = (string) ( $row['provider_refs']['action'] ?? $row['provider_refs']['transaction_id'] ?? '' );
 			if ( '' === $payment_id ) { return self::provider_error( __( 'No Mollie payment found for refund.', 'mollie-terminal-for-woocommerce' ), 'missing_payment_ref' ); }
 			$result = ( new RefundReconciler( $this->client ) )->refund( $order, $refund, $amount, (string) $refund->get_reason(), $payment_id );
 			$statuses = array( 'refunded' => 'succeeded', 'queued' => 'pending', 'pending' => 'pending', 'processing' => 'pending', 'failed' => 'failed', 'canceled' => 'failed' );
 			return array( 'status' => $statuses[ $result['mollie_status'] ] ?? 'pending', 'provider_ref' => $result['refund_id'] ?: null );
+		} catch ( MollieRefundPostUnansweredException $e ) {
+			// The POST itself went unanswered: the refund may exist. An error here would make
+			// WooCommerce delete the refund record, and a later refund would be a new record Mollie's
+			// metadata cannot be matched to: a second refund. So the record stands as pending, the
+			// order says so, and the reconciler's own ask finds the refund Mollie made by its attempt
+			// id (the Idempotency-Key) or makes it under that same id.
+			Logger::log( 'Mollie did not answer a refund POST; the refund record stays pending and is checked again.', array( 'refund_id' => $refund_id, 'message' => $e->getMessage() ), 'warning' );
+			RefundReconciler::unanswered_post( $order, $refund_id, '' !== $e->payment_id ? $e->payment_id : $payment_id, $amount );
+			return array( 'status' => 'pending', 'provider_ref' => null );
 		} catch ( RuntimeException | InvalidArgumentException $e ) {
+			// A read Mollie did not answer, or a refusal: nothing was created, and the merchant sees it.
 			return self::provider_error( $e->getMessage() );
 		}
 	}
@@ -150,14 +174,20 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 	public function verify_webhook( \WP_REST_Request $request ) {
 		$id = (string) $request->get_param( 'id' );
 		if ( ! preg_match( '/^tr_[A-Za-z0-9]+$/', $id ) ) { return new \WP_Error( 'mollie_webhook_invalid_id', __( 'Invalid Mollie payment ID.', 'mollie-terminal-for-woocommerce' ), array( 'status' => 400 ) ); }
+		// An attempt Pro adopted from the old panel carries no ledger id in its metadata; Pro's
+		// adoption record names its row. A local read, before any call to Mollie.
+		$adopted = function_exists( 'wcpos_pro_payment_id_for_action' ) ? wcpos_pro_payment_id_for_action( $this->provider(), $id ) : null;
 		try {
 			// The authenticated fetch, not the posted body, is the payment evidence.
 			$payment = $this->client->get_payment( $id );
+		} catch ( MollieNotFoundException $e ) {
+			// A forged or foreign id: this key sees no such payment, and nothing is settled.
+			return new \WP_Error( 'mollie_webhook_unknown_payment', __( 'Unknown POS payment.', 'mollie-terminal-for-woocommerce' ), array( 'status' => 404 ) );
 		} catch ( RuntimeException | InvalidArgumentException $e ) {
 			return self::provider_error( $e->getMessage() );
 		}
 		if ( ( $payment['mode'] ?? null ) !== $this->settings->mode() ) { return new \WP_Error( 'mollie_webhook_mode_mismatch', __( 'Mollie payment mode mismatch.', 'mollie-terminal-for-woocommerce' ), array( 'status' => 403 ) ); }
-		$payment_id = $payment['metadata']['wcpos_payment_id'] ?? '';
+		$payment_id = null !== $adopted ? $adopted : ( $payment['metadata']['wcpos_payment_id'] ?? '' );
 		if ( ! is_string( $payment_id ) || ! preg_match( '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $payment_id ) ) { return new \WP_Error( 'mollie_webhook_unknown_payment', __( 'Unknown POS payment.', 'mollie-terminal-for-woocommerce' ), array( 'status' => 404 ) ); }
 		return array( 'payment_id' => strtolower( $payment_id ), 'patch' => self::webhook_patch( $payment ) );
 	}

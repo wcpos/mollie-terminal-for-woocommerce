@@ -132,6 +132,28 @@ composer run lint
 composer run test
 ```
 
+### Provider conformance
+
+Pro's provider conformance suite runs the real adapter over a scripted Mollie under wp-env, with
+a sibling checkout of WooCommerce POS Pro (`../woocommerce-pos-pro`, on its `next` branch during
+development). CI runs it on PHP 7.4 and 8.3 and compares the committed transcripts in
+`tests/conformance/transcripts`; a changed transcript is a re-certification, never a file to
+regenerate blindly.
+
+```sh
+composer install
+composer install --working-dir=../woocommerce-pos-pro
+npx wp-env start
+npx wp-env run --env-cwd="wp-content/plugins/$(basename "$PWD")" tests-cli -- vendor/bin/phpunit -c phpunit.conformance.xml.dist
+```
+
+Recording missing transcripts is an explicit opt-in that must reach the PHPUnit process inside
+wp-env (it forwards no host variables):
+
+```sh
+npx wp-env run --env-cwd="wp-content/plugins/$(basename "$PWD")" tests-cli -- env WCPOS_RECORD_TRANSCRIPTS=1 vendor/bin/phpunit -c phpunit.conformance.xml.dist
+```
+
 ## References
 
 - Mollie Create Payment API: https://docs.mollie.com/reference/create-payment
