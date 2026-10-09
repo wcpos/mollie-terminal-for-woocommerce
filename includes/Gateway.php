@@ -31,15 +31,18 @@ class Gateway extends WC_Payment_Gateway {
 	 * Offered on POS requests and on the order-pay page a POS user opens, never on the shop's
 	 * checkout: terminal extensions are Pro-only at 2.0 and the POS is their only surface. The
 	 * parent is not consulted, so a site that once saved the old web-checkout switch keeps nothing.
+	 * On a POS request Free's own gateway filter applies the POS switch; on the plain order-pay
+	 * page this method applies it, so the switch under POS → Settings → Checkout is the only one.
 	 */
 	public function is_available() {
-		if ( '' === ( new Settings() )->api_key() ) {
+		$settings = new Settings();
+		if ( '' === $settings->api_key() ) {
 			return false;
 		}
 		if ( function_exists( 'woocommerce_pos_request' ) && woocommerce_pos_request() ) {
 			return true;
 		}
-		return function_exists( 'is_checkout_pay_page' ) && is_checkout_pay_page() && current_user_can( 'access_woocommerce_pos' );
+		return function_exists( 'is_checkout_pay_page' ) && is_checkout_pay_page() && current_user_can( 'access_woocommerce_pos' ) && $settings->enabled_for_pos();
 	}
 
 	public function init_form_fields(): void {

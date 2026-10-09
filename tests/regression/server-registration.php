@@ -51,6 +51,9 @@ WCPOS\WooCommercePOS\MollieTerminal\init();
 expect( in_array( array( WCPOS\WooCommercePOS\MollieTerminal\Gateway::class, 'register_gateway' ), $hooks['woocommerce_payment_gateways'][10] ?? array(), true ), 'supported Pro registers the gateway from init()' );
 expect( array( array( Settings::GATEWAY_ID, Mollie_Server_Provider::class ) ) === $registered, 'supported Pro registers the provider from init()' );
 expect( ! isset( $hooks['admin_notices'] ), 'supported Pro gets no notice' );
+foreach ( array( 'woocommerce_create_refund', 'wp_ajax_mtfwc_mollie_webhook', 'wp_ajax_nopriv_mtfwc_mollie_webhook', 'woocommerce_order_status_changed', 'mtfwc_retry_open_payment_cancel', 'cron_schedules', 'mtfwc_sweep_stale_payments' ) as $hook ) {
+	expect( isset( $hooks[ $hook ] ), 'the gate still registers ' . $hook );
+}
 expect( MTFWC_VERSION === get_option( WCPOS\WooCommercePOS\MollieTerminal\Server\Pos_Reader_Settings::MIGRATED_OPTION ), 'reader settings migrate once inside the gate' );
 $registered = array();
 expect( true === Registration::register() && array() === $registered, 'registration idempotent after init()' );
