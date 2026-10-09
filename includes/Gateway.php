@@ -549,11 +549,16 @@ class Gateway extends WC_Payment_Gateway {
 		return '';
 	}
 
-	/** Whether a Mollie payment id names a server or device leg in Pro's ledger. */
+	/**
+	 * Whether a Mollie payment id names a server or device leg in Pro's ledger that holds money
+	 * (authorized or captured). A row that ended without money (voided, failed, expired) does not
+	 * claim the payment: an adopted payment Mollie reports paid after Pro's leg ended is completed
+	 * by the old path, and the old path refunds it.
+	 */
 	private function is_pro_leg_reference( $order, string $reference ): bool {
 		if ( '' === $reference || ! class_exists( '\WCPOS\WooCommercePOS\Payments\Contract\Ledger' ) ) { return false; }
 		foreach ( \WCPOS\WooCommercePOS\Payments\Contract\Ledger::instance()->read( $order ) as $row ) {
-			if ( ! in_array( $row['capture_mode'] ?? '', array( 'server', 'device' ), true ) ) { continue; }
+			if ( ! in_array( $row['capture_mode'] ?? '', array( 'server', 'device' ), true ) || ! in_array( $row['status'] ?? '', \WCPOS\WooCommercePOS\Payments\Contract\Ledger::COUNTING_STATUSES, true ) ) { continue; }
 			$refs = $row['provider_refs'] ?? array();
 			if ( in_array( $reference, array( $refs['action'] ?? null, $refs['mollie_payment'] ?? null, $refs['transaction_id'] ?? null ), true ) ) { return true; }
 		}

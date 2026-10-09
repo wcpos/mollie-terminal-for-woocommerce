@@ -65,21 +65,24 @@ expect( $not_allocatable === run( array( $pro_row ), 'tr_pro', array(), $not_all
 // 4. No Pro leg: the old path with the order's transaction id, as before.
 $result = run( array(), 'tr_old', array(), null );
 expect( array() === $GLOBALS['pro'] && array( 'https://api.mollie.com/v2/payments/tr_old' ) === $GLOBALS['http'], 'without a Pro leg the old path refunds the transaction id' );
-// 5. The transaction id names a Pro leg that no longer counts (voided), no old-panel payment: nothing to refund.
+// 5. A Pro row that ended without money (voided) does not claim the payment: a payment Mollie reported
+//    paid after Pro's leg ended was completed by the old path, and the old path refunds it.
 $voided = $pro_row; $voided['status'] = 'voided';
-$result = run( array( $voided ), 'tr_pro', array(), null );
-expect( is_wp_error( $result ) && 'mtfwc_refund_not_found' === $result->get_error_code() && array() === $GLOBALS['http'], 'a Pro leg\'s id never reaches the old path' );
+run( array( $voided ), 'tr_pro', array(), null );
+expect( array() === $GLOBALS['pro'] && array( 'https://api.mollie.com/v2/payments/tr_pro' ) === $GLOBALS['http'], 'a payment whose Pro leg ended without money is the old path\'s to refund' );
+// 5b. A Pro row holding money (authorized) claims it: with no old-panel payment nothing reaches the old path.
+$authorized = $pro_row; $authorized['status'] = 'authorized';
+$result = run( array( $authorized ), 'tr_pro', array(), $not_allocatable );
+expect( is_wp_error( $result ) && 'wcpos_refund_not_allocatable' === $result->get_error_code() && array() === $GLOBALS['http'], 'a Pro leg holding money never reaches the old path' );
 // 6. The transaction id (the payment that completed the order) wins over the history; the history's
 //    newest paid attempt is the fallback when the transaction id is a Pro leg's.
 run( array(), 'tr_old', array( array( 'payment_id' => 'tr_first', 'status' => 'paid' ), array( 'payment_id' => 'tr_conflict', 'status' => 'paid' ) ), null );
 expect( array( 'https://api.mollie.com/v2/payments/tr_old' ) === $GLOBALS['http'], 'the transaction id is refunded, not a later paid attempt recorded as a conflict' );
-run( array( $voided ), 'tr_pro', array( array( 'payment_id' => 'tr_first', 'status' => 'paid' ), array( 'payment_id' => 'tr_x', 'status' => 'canceled' ), array( 'payment_id' => 'tr_last', 'status' => 'paid' ) ), null );
+run( array( $pro_row ), 'tr_pro', array( array( 'payment_id' => 'tr_first', 'status' => 'paid' ), array( 'payment_id' => 'tr_x', 'status' => 'canceled' ), array( 'payment_id' => 'tr_last', 'status' => 'paid' ) ), $not_allocatable );
 expect( array( 'https://api.mollie.com/v2/payments/tr_last' ) === $GLOBALS['http'], 'with the transaction id a Pro leg\'s, the newest paid old-panel attempt is refunded' );
-// 7. A paid attempt in the history that is itself a Pro leg (the keypad payment) never reaches the old path.
-run( array( $voided ), 'tr_pro', array( array( 'payment_id' => 'tr_pro', 'status' => 'paid' ) ), null );
-expect( array() === $GLOBALS['http'] && is_wp_error( $result = null ) === false, 'a Pro leg in the history is not an old-panel payment' );
-$result = run( array( $voided ), 'tr_pro', array( array( 'payment_id' => 'tr_pro', 'status' => 'paid' ) ), null );
-expect( is_wp_error( $result ) && 'mtfwc_refund_not_found' === $result->get_error_code() && array() === $GLOBALS['http'], 'nothing to refund when the only paid attempt is the Pro leg' );
+// 7. A paid attempt in the history that is itself a Pro leg holding money (the keypad payment) never reaches the old path.
+$result = run( array( $pro_row ), 'tr_pro', array( array( 'payment_id' => 'tr_pro', 'status' => 'paid' ) ), $not_allocatable );
+expect( is_wp_error( $result ) && 'wcpos_refund_not_allocatable' === $result->get_error_code() && array() === $GLOBALS['http'], 'nothing reaches the old path when the only paid attempt is the Pro leg' );
 
 echo "process-refund-routing ok\n";
 }
