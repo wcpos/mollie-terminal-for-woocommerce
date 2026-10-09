@@ -50,7 +50,7 @@ function wp_json_encode( $value ) { return json_encode( $value ); }
 class SilentLoggerForPanel { public function log( $level, $message, $context = array() ) {} }
 function wc_get_logger() { return new SilentLoggerForPanel(); }
 function wcpos_pro_payment_id_for_action( $provider, $ref ) { return null; }
-function wcpos_pro_adopt_legacy_attempt( $order, $gateway_id, $ref, $amount, $currency ) { $GLOBALS['adopted'][] = array( $order->get_id(), $ref ); return array( 'id' => 'row' ); }
+function wcpos_pro_adopt_legacy_attempt( $order, $gateway_id, $ref, $amount, $currency ) { $GLOBALS['adopted'][] = array( $order->get_id(), $ref ); if ( ! empty( $GLOBALS['adopt_throws'] ) ) { throw new RuntimeException( 'boom' ); } return array( 'id' => 'row' ); }
 $wpdb = new FakeWpdb();
 require_once __DIR__ . '/../../includes/Settings.php';
 require_once __DIR__ . '/../../includes/Logger.php';
@@ -95,6 +95,14 @@ expect( array( array( 123, 'tr_left' ) ) === $GLOBALS['adopted'] && 1 === count(
 WCPOS\WooCommercePOS\Payments\Contract\Order_Lock::$refuse = array( 123 );
 $html = render( array( 'default_terminal_id' => 'term_1' ) );
 expect( array() === $GLOBALS['panel'] && false !== strpos( $html, 'Reload the page in a moment' ), 'a refused render-time adoption shows a wait, not Pro\'s panel' );
+// Pro refusing or throwing leaves the attempt open and unowned: no panel either, and the page says the
+// old sweep cancels it within ten minutes.
+WCPOS\WooCommercePOS\Payments\Contract\Order_Lock::$refuse = array();
+$GLOBALS['adopt_throws'] = true;
+$html = render( array( 'default_terminal_id' => 'term_1' ) );
+expect( array() === $GLOBALS['panel'] && false !== strpos( $html, 'cancelled automatically within ten minutes' ), 'a failed adoption shows no panel and says what happens next' );
+$GLOBALS['adopt_throws'] = false;
+WCPOS\WooCommercePOS\Payments\Contract\Order_Lock::$refuse = array( 123 );
 // With nothing to adopt the lock is not even asked for: a held lock on a plain order shows the panel.
 $GLOBALS['order']->meta = array();
 render( array( 'default_terminal_id' => 'term_1' ) );

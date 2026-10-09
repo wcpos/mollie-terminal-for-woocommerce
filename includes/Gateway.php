@@ -246,11 +246,14 @@ class Gateway extends WC_Payment_Gateway {
 			if ( $order instanceof \WC_Order ) {
 				// An open attempt the old panel left on this order (the upgrade pass has not reached
 				// it, or QR was switched off mid-flight) is Pro's before the panel can offer a second
-				// charge. While a till holds the order, or a completion is in flight, the panel waits
-				// rather than offer a charge beside an attempt nobody owns yet.
+				// charge. Any refusal leaves that attempt open and unowned, so no panel: while a till
+				// holds the order or a completion is in flight the page asks for a moment; when Pro
+				// refused or threw, the old sweep cancels the attempt within ten minutes and the page
+				// says so.
 				$adopted = Legacy_Adoption::adopt_order( $order->get_id() );
-				if ( is_wp_error( $adopted ) && in_array( $adopted->get_error_code(), array( 'wcpos_payment_locked', 'mtfwc_adoption_no_lock', 'mtfwc_adoption_completing' ), true ) ) {
-					echo '<p class="mtfwc-payment-help">' . esc_html__( 'Another request is handling this order. Reload the page in a moment.', 'mollie-terminal-for-woocommerce' ) . '</p>';
+				if ( is_wp_error( $adopted ) ) {
+					$waiting = in_array( $adopted->get_error_code(), array( 'wcpos_payment_locked', 'mtfwc_adoption_no_lock', 'mtfwc_adoption_completing' ), true );
+					echo '<p class="mtfwc-payment-help">' . esc_html( $waiting ? __( 'Another request is handling this order. Reload the page in a moment.', 'mollie-terminal-for-woocommerce' ) : __( 'A Mollie Terminal payment is still open on this order and could not be handed to WooCommerce POS. It is cancelled automatically within ten minutes; reload the page then, or check it in the Mollie dashboard.', 'mollie-terminal-for-woocommerce' ) ) . '</p>';
 					return;
 				}
 				wcpos_pro_order_pay_panel( $this, $order );
