@@ -248,12 +248,12 @@ class Gateway extends WC_Payment_Gateway {
 				// it, or QR was switched off mid-flight) is Pro's before the panel can offer a second
 				// charge. Any refusal leaves that attempt open and unowned, so no panel: while a till
 				// holds the order or a completion is in flight the page asks for a moment; when Pro
-				// refused or threw, the old sweep cancels the attempt within ten minutes and the page
-				// says so.
+				// refused or threw, the attempt ends on its own (Mollie expires it, or the old sweep
+				// cancels it once stale) and the page says so.
 				$adopted = Legacy_Adoption::adopt_order( $order->get_id() );
 				if ( is_wp_error( $adopted ) ) {
 					$waiting = in_array( $adopted->get_error_code(), array( 'wcpos_payment_locked', 'mtfwc_adoption_no_lock', 'mtfwc_adoption_completing' ), true );
-					echo '<p class="mtfwc-payment-help">' . esc_html( $waiting ? __( 'Another request is handling this order. Reload the page in a moment.', 'mollie-terminal-for-woocommerce' ) : __( 'A Mollie Terminal payment is still open on this order and could not be handed to WooCommerce POS. It is cancelled automatically within ten minutes; reload the page then, or check it in the Mollie dashboard.', 'mollie-terminal-for-woocommerce' ) ) . '</p>';
+					echo '<p class="mtfwc-payment-help">' . esc_html( $waiting ? __( 'Another request is handling this order. Reload the page in a moment.', 'mollie-terminal-for-woocommerce' ) : __( 'A Mollie Terminal payment is still open on this order and could not be handed to WooCommerce POS. It ends on its own shortly (Mollie expires it, or the automatic cleanup cancels it); reload the page then, or check it in the Mollie dashboard.', 'mollie-terminal-for-woocommerce' ) ) . '</p>';
 					return;
 				}
 				wcpos_pro_order_pay_panel( $this, $order );
