@@ -137,7 +137,9 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 			$order = wc_get_order( (int) $row['order_id'] );
 			$refund = wc_get_order( $refund_id );
 			if ( ! $order || ! $refund ) { return new \WP_Error( 'wcpos_refund_not_found', __( 'Order or refund not found.', 'mollie-terminal-for-woocommerce' ), array( 'status' => 404 ) ); }
-			$payment_id = $row['provider_refs']['action'] ?? '';
+			// The leg's own action, or, for a historical webview row, the Mollie payment id Free kept as
+			// the transaction reference.
+			$payment_id = (string) ( $row['provider_refs']['action'] ?? $row['provider_refs']['transaction_id'] ?? '' );
 			if ( '' === $payment_id ) { return self::provider_error( __( 'No Mollie payment found for refund.', 'mollie-terminal-for-woocommerce' ), 'missing_payment_ref' ); }
 			$result = ( new RefundReconciler( $this->client ) )->refund( $order, $refund, $amount, (string) $refund->get_reason(), $payment_id );
 			$statuses = array( 'refunded' => 'succeeded', 'queued' => 'pending', 'pending' => 'pending', 'processing' => 'pending', 'failed' => 'failed', 'canceled' => 'failed' );
@@ -150,6 +152,9 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 	public function verify_webhook( \WP_REST_Request $request ) {
 		$id = (string) $request->get_param( 'id' );
 		if ( ! preg_match( '/^tr_[A-Za-z0-9]+$/', $id ) ) { return new \WP_Error( 'mollie_webhook_invalid_id', __( 'Invalid Mollie payment ID.', 'mollie-terminal-for-woocommerce' ), array( 'status' => 400 ) ); }
+		// An attempt Pro adopted from the old panel carries no ledger id in its metadata; Pro's
+		// adoption record names its row. A local read, before any call to Mollie.
+		$adopted = function_exists( 'wcpos_pro_payment_id_for_action' ) ? wcpos_pro_payment_id_for_action( $this->provider(), $id ) : null;
 		try {
 			// The authenticated fetch, not the posted body, is the payment evidence.
 			$payment = $this->client->get_payment( $id );
@@ -157,7 +162,7 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 			return self::provider_error( $e->getMessage() );
 		}
 		if ( ( $payment['mode'] ?? null ) !== $this->settings->mode() ) { return new \WP_Error( 'mollie_webhook_mode_mismatch', __( 'Mollie payment mode mismatch.', 'mollie-terminal-for-woocommerce' ), array( 'status' => 403 ) ); }
-		$payment_id = $payment['metadata']['wcpos_payment_id'] ?? '';
+		$payment_id = null !== $adopted ? $adopted : ( $payment['metadata']['wcpos_payment_id'] ?? '' );
 		if ( ! is_string( $payment_id ) || ! preg_match( '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $payment_id ) ) { return new \WP_Error( 'mollie_webhook_unknown_payment', __( 'Unknown POS payment.', 'mollie-terminal-for-woocommerce' ), array( 'status' => 404 ) ); }
 		return array( 'payment_id' => strtolower( $payment_id ), 'patch' => self::webhook_patch( $payment ) );
 	}
