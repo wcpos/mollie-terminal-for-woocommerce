@@ -4,8 +4,8 @@ namespace WCPOS\WooCommercePOS\MollieTerminal\Server;
 use WCPOS\WooCommercePOS\MollieTerminal\Settings;
 
 final class Registration {
-	// First Pro version with wcpos_pro_register_server_provider() and the shared server handler.
-	public const REQUIRED_PRO_VERSION = '1.11.0';
+	// First Pro release the extension runs on: the shared payments base and the order-pay panel.
+	public const REQUIRED_PRO_VERSION = '2.0.0';
 	private static $registered = false;
 
 	public static function pro_supported(): bool {
@@ -20,11 +20,5 @@ final class Registration {
 			self::$registered = true;
 		}
 		return true;
-	}
-
-	public static function activation_check( string $plugin_file ): void {
-		if ( function_exists( 'wcpos_pro_requires' ) && ! wcpos_pro_requires( self::REQUIRED_PRO_VERSION ) ) {
-			wcpos_pro_requires( self::REQUIRED_PRO_VERSION, $plugin_file );
-		}
 	}
 }

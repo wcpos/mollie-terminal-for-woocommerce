@@ -15,6 +15,8 @@ function wp_salt( $scheme = '' ) { return 'test-salt'; }
 function wp_doing_ajax() { return false; }
 function wp_json_encode( $value ) { return json_encode( $value ); }
 function apply_filters( $tag, $value ) { return $value; }
+// The gateway switch lives under POS → Settings → Checkout (see ajax-gateway-disabled.php).
+function wcpos_get_settings( $id, $key = null ) { return array( 'gateways' => array( 'mollie_terminal_for_woocommerce' => array( 'enabled' => true ) ) ); }
 
 class SilentWooLoggerForQrGuard { public function log( $level, $message, $context = array() ) {} }
 function wc_get_logger() { return new SilentWooLoggerForQrGuard(); }
@@ -40,7 +42,7 @@ function start_qr( array $settings, string $method ): JsonResponseForQrGuard {
 	global $options;
 	// The gateway switch is checked first (see ajax-gateway-disabled.php); this
 	// script is about the QR method guard behind it.
-	$options = array( 'woocommerce_mollie_terminal_for_woocommerce_settings' => array_merge( array( 'enabled' => 'yes' ), $settings ) );
+	$options = array( 'woocommerce_mollie_terminal_for_woocommerce_settings' => $settings );
 	$_POST   = array( 'order_id' => '123', 'order_token' => AjaxHandler::order_token( 123 ), 'channel' => 'qr', 'qr_method' => $method );
 	try {
 		( new AjaxHandler() )->mtfwc_start_payment();

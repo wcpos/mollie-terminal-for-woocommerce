@@ -1,6 +1,8 @@
 # Mollie Terminal for WooCommerce
 
-Mollie Terminal support for WooCommerce and WooCommerce POS.
+Mollie Terminal support for WooCommerce POS. Requires WooCommerce POS Pro 2.0.0 or newer; the
+gateway is offered on the POS only (the keypad tile and the POS order-pay page), never as a
+payment method on the shop's checkout.
 
 This plugin starts Mollie `pointofsale` payments for in-person checkout and treats Mollie as the source of truth for payment and refund state. Local WooCommerce order meta is only a cache.
 
@@ -15,8 +17,8 @@ This plugin starts Mollie `pointofsale` payments for in-person checkout and trea
 
 ## Setup
 
-1. Install and activate WooCommerce.
-2. Activate this plugin.
+1. Install and activate WooCommerce and WooCommerce POS Pro 2.0.0 or newer.
+2. Activate this plugin. Without a supported Pro, it registers nothing and shows an admin notice.
 3. Go to WooCommerce → Settings → Payments → Mollie Terminal.
 4. Choose an **API key source**: enter the Mollie API key matching the selected
    mode here, or
@@ -42,14 +44,14 @@ This plugin starts Mollie `pointofsale` payments for in-person checkout and trea
 You do not need to enter a Mollie **Profile ID**: it is not required for
 `pointofsale` payments, and terminals are listed across the whole account.
 
-## WooCommerce POS 1.11 checkout
+## WooCommerce POS 2.0 checkout
 
-With WooCommerce POS Pro 1.11.0 or newer, enable Mollie Terminal under POS → Settings → Checkout to use its terminal tile.
+Enable Mollie Terminal under POS → Settings → Checkout to use its terminal tile; that switch is the
+only one (the old WooCommerce → Payments "enable for web checkout" setting is gone).
 Cashiers send the selected payment amount to a reader from the tile; terminal tips are recorded as an order fee.
 Manage **Default terminal**, **Enabled terminals** and **Lock terminal selection** under WooCommerce → Settings → Payments → Mollie Terminal.
 These fields are mirrored into POS reader settings when saved; initial migration preserves existing POS reader choices.
-The **Legacy** tab is unchanged, and iDEAL/Bancontact QR payments remain there only.
-Without a supported Pro version, the plugin continues to use the legacy gateway only.
+The **Legacy** tab (the POS order-pay page) is unchanged, and iDEAL/Bancontact QR payments remain there only.
 
 ## Legacy checkout flow
 

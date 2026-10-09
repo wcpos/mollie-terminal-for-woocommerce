@@ -49,7 +49,10 @@ function mtfwc_activate(): void {
 		deactivate_plugins( plugin_basename( __FILE__ ) );
 		wp_die( esc_html( sprintf( __( 'Mollie Terminal for WooCommerce requires PHP %1$s or newer. Your server is running PHP %2$s.', 'mollie-terminal-for-woocommerce' ), MTFWC_MINIMUM_PHP_VERSION, PHP_VERSION ) ) );
 	}
-	Server\Registration::activation_check( __FILE__ );
+	// Terminal extensions are Pro-only at 2.0; Pro records the requirement for its own notice.
+	if ( function_exists( 'wcpos_pro_requires' ) ) {
+		wcpos_pro_requires( Server\Registration::REQUIRED_PRO_VERSION, __FILE__ );
+	}
 }
 register_activation_hook( __FILE__, __NAMESPACE__ . '\\mtfwc_activate' );
 
@@ -65,12 +68,26 @@ function load_textdomain(): void {
 add_action( 'init', __NAMESPACE__ . '\\load_textdomain' );
 
 function init(): void {
+	// Terminal extensions are Pro-only at 2.0: the keypad tile and the order-pay page both rely
+	// on Pro's shared payments base.
+	if ( ! function_exists( 'wcpos_pro_requires' ) || ! wcpos_pro_requires( Server\Registration::REQUIRED_PRO_VERSION, __FILE__ ) ) {
+		add_action(
+			'admin_notices',
+			static function (): void {
+				echo '<div class="notice notice-error"><p>' . esc_html__( 'Mollie Terminal for WooCommerce needs WooCommerce POS Pro 2.0.0 or newer.', 'mollie-terminal-for-woocommerce' ) . '</p></div>';
+			}
+		);
+		return;
+	}
 	add_filter( 'woocommerce_payment_gateways', array( Gateway::class, 'register_gateway' ) );
 	add_action( 'woocommerce_create_refund', array( RefundHandler::class, 'remember_refund' ), 10, 2 );
+	// The keypad's server mode, on Pro's shared base.
+	Server\Registration::register();
 	new AjaxHandler();
 	new WebhookHandler();
 	new PaymentCleanup();
 	new PaymentSweeper();
 }
-add_action( 'plugins_loaded', __NAMESPACE__ . '\\init', 11 );
-add_action( 'plugins_loaded', array( Server\Registration::class, 'register' ), 30 );
+// Pro defines wcpos_pro_requires() and the provider registration API from its own
+// plugins_loaded hook at priority 20; the gate must run after that.
+add_action( 'plugins_loaded', __NAMESPACE__ . '\\init', 30 );

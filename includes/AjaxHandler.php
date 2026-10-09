@@ -160,13 +160,12 @@ class AjaxHandler {
 	}
 
 	/**
-	 * A gateway switched off everywhere must stay off: the checkout actions
-	 * stay registered while the plugin is active, so starting a payment and
-	 * listing terminals check the switches themselves. There are two: the
-	 * WooCommerce → Payments checkbox (online store) and POS → Settings →
-	 * Checkout (WooCommerce POS), and either one counts — POS merchants
-	 * routinely leave the WooCommerce one off (the 0.5.1 guard only looked at
-	 * that one and locked every such POS out of taking payments).
+	 * A gateway switched off must stay off: the checkout actions stay registered
+	 * while the plugin is active, so starting a payment and listing terminals
+	 * check the switch themselves. The switch is POS → Settings → Checkout; the
+	 * WooCommerce → Payments checkbox governed the shop's checkout, which no
+	 * longer offers the gateway (the 0.5.1 guard looked only at that one and
+	 * locked every POS-only shop out of taking payments).
 	 * Poll and cancel are deliberately not gated (nor is the webhook): a
 	 * payment already in flight must still settle, and the cashier must keep
 	 * the ability to cancel it, even if the gateway was switched off meanwhile.
