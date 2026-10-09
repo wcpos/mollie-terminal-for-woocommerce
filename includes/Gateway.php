@@ -246,8 +246,13 @@ class Gateway extends WC_Payment_Gateway {
 			if ( $order instanceof \WC_Order ) {
 				// An open attempt the old panel left on this order (the upgrade pass has not reached
 				// it, or QR was switched off mid-flight) is Pro's before the panel can offer a second
-				// charge; a refusal (a till holds the order) leaves it to the pass.
-				Legacy_Adoption::adopt_order( $order->get_id() );
+				// charge. While a till holds the order, or a completion is in flight, the panel waits
+				// rather than offer a charge beside an attempt nobody owns yet.
+				$adopted = Legacy_Adoption::adopt_order( $order->get_id() );
+				if ( is_wp_error( $adopted ) && in_array( $adopted->get_error_code(), array( 'wcpos_payment_locked', 'mtfwc_adoption_no_lock', 'mtfwc_adoption_completing' ), true ) ) {
+					echo '<p class="mtfwc-payment-help">' . esc_html__( 'Another request is handling this order. Reload the page in a moment.', 'mollie-terminal-for-woocommerce' ) . '</p>';
+					return;
+				}
 				wcpos_pro_order_pay_panel( $this, $order );
 			}
 			return;
@@ -277,7 +282,10 @@ class Gateway extends WC_Payment_Gateway {
 		$resume = false;
 		$resume_channel = 'terminal';
 		$resume_method = '';
-		if ( $order && ! $order->is_paid() ) {
+		// A leg Pro owns (adopted while the page was Pro's panel, its row still live) is not resumed
+		// here: the old panel may not poll or cancel it, and its actions answer 409 until Pro's leg
+		// has ended.
+		if ( $order && ! $order->is_paid() && ! Legacy_Adoption::owns_order( $order ) ) {
 			$current = PaymentAttempt::current( $order );
 			$status = (string) ( $current['status'] ?? '' );
 			if ( $current && ! empty( $current['payment_id'] ) && ( PaymentAttempt::is_non_final( $status ) || PaymentAttempt::reported_paid( $status ) ) ) {

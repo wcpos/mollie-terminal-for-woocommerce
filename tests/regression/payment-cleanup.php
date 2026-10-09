@@ -39,6 +39,7 @@ class FakeOrderForCleanup {
 	public function get_id() { return 321; }
 	public $status = 'processing';
 	public function get_status() { return $this->status; }
+	public function get_transaction_id() { return ''; }
 	public $payment_method = '';
 	public $payment_method_title = '';
 	public function get_payment_method() { return $this->payment_method; }

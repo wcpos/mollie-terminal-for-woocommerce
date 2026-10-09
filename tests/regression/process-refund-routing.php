@@ -2,15 +2,8 @@
 // A refund on an order with a counting Pro leg goes through Pro; the old path refunds only a
 // payment the old panel completed, never a Pro leg's Mollie payment id that Free copied onto the
 // order; when Pro cannot allocate the amount and an old-panel payment exists, the old path takes it.
-namespace WCPOS\WooCommercePOS\Payments\Contract {
-	class Ledger {
-		public const COUNTING_STATUSES = array( 'authorized', 'captured' );
-		public static function instance() { return new self(); }
-		public function read( $order ) { return $GLOBALS['rows']; }
-	}
-}
-
 namespace {
+require_once __DIR__ . '/stubs/ledger.php';
 function expect( $condition, $message = 'expectation failed' ) { if ( ! $condition ) { fwrite( STDERR, $message . "\n" ); exit( 1 ); } }
 require_once __DIR__ . '/support/fake-wpdb.php';
 if ( ! class_exists( 'WP_Error' ) ) { class WP_Error { private $code; public function __construct( $code, $message = '', $data = null ) { $this->code = $code; } public function get_error_code() { return $this->code; } public function get_error_message() { return 'offline'; } } }
@@ -53,7 +46,7 @@ class FakeOrderForRefunds {
 	public function get_currency() { return 'EUR'; }
 }
 function run( array $rows, string $txn, array $history, $pro_answer ) {
-	$GLOBALS['rows'] = $rows; $GLOBALS['pro'] = array(); $GLOBALS['http'] = array(); $GLOBALS['pro_answer'] = $pro_answer;
+	$GLOBALS['ledger_rows'] = array( 55 => $rows ); $GLOBALS['pro'] = array(); $GLOBALS['http'] = array(); $GLOBALS['pro_answer'] = $pro_answer;
 	$GLOBALS['order'] = new FakeOrderForRefunds(); $GLOBALS['order']->txn = $txn; $GLOBALS['order']->history = $history;
 	return $GLOBALS['gateway']->process_refund( 55, '5.00', 'why' );
 }

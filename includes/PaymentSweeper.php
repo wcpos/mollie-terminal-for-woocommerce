@@ -163,7 +163,7 @@ class PaymentSweeper {
 		if ( ! $current || empty( $current['payment_id'] ) ) { return $swept; }
 		// An attempt Pro adopted on upgrade is Pro's leg: its deadline, cancel and settlement are
 		// Free's, and this sweep must neither cancel nor complete it.
-		if ( Legacy_Adoption::is_adopted( (string) $current['payment_id'] ) ) { return $swept; }
+		if ( Legacy_Adoption::owned_by_pro( $order, (string) $current['payment_id'] ) ) { return $swept; }
 		$status = (string) ( $current['status'] ?? '' );
 		if ( 'paid' === $status ) {
 			// A completion died after storing the verified paid attempt, before

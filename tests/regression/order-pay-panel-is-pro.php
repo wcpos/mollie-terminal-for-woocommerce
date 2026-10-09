@@ -91,6 +91,11 @@ expect( array() === $GLOBALS['adopted'], 'an order without an old attempt has no
 $GLOBALS['order']->meta = array( WCPOS\WooCommercePOS\MollieTerminal\PaymentAttempt::META_CURRENT_PAYMENT_ID => 'tr_left', WCPOS\WooCommercePOS\MollieTerminal\PaymentAttempt::META_CURRENT_PAYMENT_METHOD => 'pointofsale', WCPOS\WooCommercePOS\MollieTerminal\PaymentAttempt::META_CURRENT_PAYMENT_STATUS => 'open' );
 render( array( 'default_terminal_id' => 'term_1' ) );
 expect( array( array( 123, 'tr_left' ) ) === $GLOBALS['adopted'] && 1 === count( $GLOBALS['panel'] ), 'an open old attempt is Pro\'s before Pro\'s panel renders' );
+// While a till holds the order the panel waits instead of offering a charge beside an attempt nobody owns yet.
+WCPOS\WooCommercePOS\Payments\Contract\Order_Lock::$refuse = array( 123 );
+$html = render( array( 'default_terminal_id' => 'term_1' ) );
+expect( array() === $GLOBALS['panel'] && false !== strpos( $html, 'Reload the page in a moment' ), 'a refused render-time adoption shows a wait, not Pro\'s panel' );
+WCPOS\WooCommercePOS\Payments\Contract\Order_Lock::$refuse = array();
 $GLOBALS['order']->meta = array();
 expect( array() === enqueue( array(), true ), 'nothing is enqueued for Pro\'s panel, even on the order-pay page' );
 

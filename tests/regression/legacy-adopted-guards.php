@@ -35,6 +35,8 @@ function wp_send_json_error( $data = null, $status_code = null ) { throw new Jso
 function wp_send_json_success( $data = null, $status_code = null ) { throw new JsonResponseForGuards( $data, 200 ); }
 
 require_once __DIR__ . '/stubs/wcpos-pro-server.php';
+require_once __DIR__ . '/stubs/ledger.php';
+function wc_get_orders( $args ) { return ( $GLOBALS['order'] ?? null ) && ( $GLOBALS['order']->meta[ '_mtfwc_current_payment_id' ] ?? null ) === ( $args['meta_value'] ?? null ) ? array( $GLOBALS['order'] ) : array(); }
 require_once __DIR__ . '/../../includes/Settings.php';
 require_once __DIR__ . '/../../includes/Logger.php';
 require_once __DIR__ . '/../../includes/PaymentAttempt.php';
@@ -67,8 +69,9 @@ class FakeOrderForGuards {
 	public function get_currency() { return 'EUR'; }
 	public function get_order_number() { return '777'; }
 	public function get_checkout_order_received_url() { return 'https://shop.example/received/777'; }
-	public function get_transaction_id() { return ''; }
-	public function set_transaction_id( $id ) {}
+	public $txn = '';
+	public function get_transaction_id() { return $this->txn; }
+	public function set_transaction_id( $id ) { $this->txn = $id; }
 	public function payment_complete( $id = '' ) { $this->completed++; $this->paid = true; return true; }
 	public function delete_meta_data( $key ) { unset( $this->meta[ $key ] ); }
 	public function is_paid() { return $this->paid; }
@@ -100,12 +103,19 @@ function open_attempt( string $payment_id, int $age ): FakeOrderForGuards {
 	return $order;
 }
 
-// The sweep: an adopted open attempt past the threshold is left alone; an unadopted one is swept.
+// Pro owns tr_adopted while its row is live.
 $GLOBALS['adopted_map'] = array( 'tr_adopted' => 'row-1' );
+$GLOBALS['ledger_rows'] = array( 777 => array( array( 'id' => 'row-1', 'status' => 'pending' ) ) );
+
+// The sweep: an adopted open attempt past the threshold is left alone; an unadopted one is swept.
 $service = new CountingServiceForGuards();
 $sweeper = new PaymentSweeper( $service );
 expect( false === $sweeper->sweep_order( open_attempt( 'tr_adopted', 3600 ) ) && 0 === $service->cancels, 'the sweep leaves an adopted attempt alone' );
 expect( true === $sweeper->sweep_order( open_attempt( 'tr_old', 3600 ) ) && 1 === $service->cancels, 'an unadopted stale attempt is still swept' );
+// Once Pro's leg has ended without money, the old paths act on the payment again.
+$GLOBALS['ledger_rows'][777][0]['status'] = 'voided';
+expect( true === $sweeper->sweep_order( open_attempt( 'tr_adopted', 3600 ) ) && 2 === $service->cancels, 'an adopted attempt whose Pro leg ended is swept as before adoption' );
+$GLOBALS['ledger_rows'][777][0]['status'] = 'pending';
 
 // The order-status cleanup cancels an adopted attempt too when the order is paid another way: a
 // terminal payment left open is a second charge waiting for a tap, and Pro voids only on
@@ -114,6 +124,10 @@ $service = new CountingServiceForGuards();
 $cleanup = new PaymentCleanup( $service );
 $cleanup->maybe_cancel_abandoned_payment( 777, 'pending', 'processing', open_attempt( 'tr_adopted', 10 ) );
 expect( 1 === $service->cancels, 'the cleanup cancels an adopted attempt when the order is paid another way' );
+// The payment that completed the order (Pro's capture) is not open: nothing to cancel, no note.
+$paid_by_it = open_attempt( 'tr_adopted', 10 ); $paid_by_it->txn = 'tr_adopted';
+$cleanup->maybe_cancel_abandoned_payment( 777, 'pending', 'processing', $paid_by_it );
+expect( 1 === $service->cancels, 'the payment that paid the order is not cancelled' );
 $GLOBALS['order'] = open_attempt( 'tr_adopted', 10 ); $GLOBALS['order']->status = 'processing';
 $cleanup->retry_cancel( 777, 'tr_adopted', 1 );
 expect( 2 === $service->cancels, 'the cleanup retry cancels it too' );
@@ -153,6 +167,13 @@ foreach ( array( 'mtfwc_poll_payment', 'mtfwc_cancel_payment', 'mtfwc_start_paym
 		expect( 409 === $r->status && false !== strpos( $r->data, 'Reload the page' ), "$action on an adopted attempt is refused with a reload message" );
 	}
 }
+// Once Pro's leg has ended, the old panel's actions work again (here: poll answers idle, no attempt).
+$GLOBALS['ledger_rows'][777][0]['status'] = 'voided';
+$GLOBALS['order'] = open_attempt( 'tr_adopted', 10 );
+$GLOBALS['order']->meta = array(); // the attempt was finished by the old poll meanwhile
+$_POST = array( 'order_id' => '777', 'order_token' => AjaxHandler::order_token( 777 ) );
+try { ( new AjaxHandler() )->mtfwc_poll_payment(); expect( false, 'poll should answer' ); } catch ( JsonResponseForGuards $r ) { expect( 200 === $r->status, 'after Pro\'s leg ended the old panel is not refused' ); }
+$GLOBALS['ledger_rows'][777][0]['status'] = 'pending';
 // The adopted reference kept on the order counts once the pointer moved on.
 $GLOBALS['order'] = open_attempt( 'tr_newer', 10 ); $GLOBALS['order']->meta['_mtfwc_adopted_ref'] = 'tr_adopted';
 $_POST = array( 'order_id' => '777', 'order_token' => AjaxHandler::order_token( 777 ) );
@@ -163,11 +184,17 @@ try { ( new AjaxHandler() )->mtfwc_poll_payment(); expect( false, 'poll should a
 
 // The legacy webhook: an adopted delivery is acknowledged before any call to Mollie.
 $GLOBALS['http'] = array(); $GLOBALS['log'] = array();
+$GLOBALS['order'] = open_attempt( 'tr_adopted', 10 );
 ( new WebhookHandler() )->process( 'tr_adopted' );
 expect( array() === $GLOBALS['http'], 'an adopted delivery makes no call to Mollie' );
-expect( 1 === count( array_filter( $GLOBALS['log'], static function ( $m ) { return false !== strpos( $m, 'adopted' ); } ) ), 'the skip is logged' );
+$GLOBALS['ledger_rows'][777][0]['status'] = 'voided';
+( new WebhookHandler() )->process( 'tr_adopted' );
+expect( array( 'https://api.mollie.com/v2/payments/tr_adopted' ) === $GLOBALS['http'], 'once Pro\'s leg ended a late delivery is processed as before adoption' );
+$GLOBALS['ledger_rows'][777][0]['status'] = 'pending'; $GLOBALS['http'] = array();
+expect( 1 === count( array_filter( $GLOBALS['log'], static function ( $m ) { return false !== strpos( $m, 'left to the POS' ); } ) ), 'the skip is logged' );
 ( new WebhookHandler() )->process( 'tr_other' );
 expect( array( 'https://api.mollie.com/v2/payments/tr_other' ) === $GLOBALS['http'], 'any other delivery is fetched from Mollie as before' );
+expect( 1 === count( array_filter( $GLOBALS['log'], static function ( $m ) { return false !== strpos( $m, 'left to the POS' ); } ) ), 'the skip is logged once' );
 ( new WebhookHandler() )->process( '' );
 expect( 1 === count( $GLOBALS['http'] ), 'an empty delivery is acknowledged without a call' );
 

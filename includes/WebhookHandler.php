@@ -23,10 +23,13 @@ class WebhookHandler {
 			Logger::log( 'Mollie webhook received without payment ID.', array(), 'warning' );
 			return;
 		}
-		// An attempt Pro adopted on upgrade is Pro's leg: Pro's poll settles it from Mollie's
-		// authenticated state within a poll interval, and this handler writes nothing. The local
-		// lookup runs before any call to Mollie.
-		if ( Legacy_Adoption::is_adopted( $payment_id ) ) {
+		// An attempt Pro adopted on upgrade is Pro's leg while its row is live: Pro's poll settles
+		// it from Mollie's authenticated state within a poll interval, and this handler writes
+		// nothing. The local lookup (the order by its attempt pointer, then Pro's row) runs before
+		// any call to Mollie. Once Pro's leg has ended without money, a late result reaches the
+		// order through this handler as before adoption.
+		$known = Legacy_Adoption::is_adopted( $payment_id ) ? $this->find_order_by_attempt( $payment_id ) : null;
+		if ( $known && Legacy_Adoption::owned_by_pro( $known, $payment_id ) ) {
 			Logger::log( 'Mollie webhook for an attempt WooCommerce POS adopted; left to the POS.', array( 'payment_id' => $payment_id ), 'info' );
 			return;
 		}
@@ -41,7 +44,7 @@ class WebhookHandler {
 			}
 			// Asked again after the call to Mollie: adoption may have run meanwhile. The reconciler
 			// repeats the check under its completion claim, which adoption shares.
-			if ( Legacy_Adoption::is_adopted( $payment_id ) ) {
+			if ( Legacy_Adoption::owned_by_pro( $order, $payment_id ) ) {
 				Logger::log( 'Mollie webhook for an attempt WooCommerce POS adopted meanwhile; left to the POS.', array( 'payment_id' => $payment_id ), 'info' );
 				return;
 			}
@@ -55,7 +58,12 @@ class WebhookHandler {
 	private function find_order_for_payment( string $payment_id, array $payment ) {
 		$order_id = (int) ( $payment['metadata']['order_id'] ?? 0 );
 		if ( $order_id ) { $order = wc_get_order( $order_id ); if ( $order ) { return $order; } }
-		$orders = wc_get_orders( array( 'limit' => 1, 'meta_key' => PaymentAttempt::META_CURRENT_PAYMENT_ID, 'meta_value' => $payment_id ) );
-		return $orders[0] ?? null;
+		return $this->find_order_by_attempt( $payment_id );
+	}
+
+	/** The order whose current attempt is this payment, without asking Mollie. */
+	private function find_order_by_attempt( string $payment_id ) {
+		$orders = wc_get_orders( array( 'type' => 'shop_order', 'limit' => 1, 'meta_key' => PaymentAttempt::META_CURRENT_PAYMENT_ID, 'meta_value' => $payment_id ) ); // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key,WordPress.DB.SlowDBQuery.slow_db_query_meta_value -- One lookup per delivery.
+		return is_array( $orders ) ? ( $orders[0] ?? null ) : null;
 	}
 }

@@ -143,7 +143,7 @@ class AjaxHandler {
 			// no old-panel start is accepted at all, adopted attempt or none: a second, untracked
 			// Mollie payment beside Pro's leg would be a double charge. Poll and cancel of an attempt
 			// Pro did not adopt (a QR attempt in flight when the methods were switched off) go on.
-			if ( Legacy_Adoption::is_adopted_order( $order ) || ( 'start_payment' === $operation && $this->settings()->uses_pro_panel() ) ) {
+			if ( Legacy_Adoption::owns_order( $order ) || ( 'start_payment' === $operation && $this->settings()->uses_pro_panel() ) ) {
 				wp_send_json_error( __( 'This payment is now handled by WooCommerce POS. Reload the page.', 'mollie-terminal-for-woocommerce' ), 409 );
 			}
 			$result = $callback( $order );

@@ -213,7 +213,7 @@ class MolliePaymentService {
 				// An interrupted set-aside can leave one open payment both current and abandoned;
 				// adopted by WooCommerce POS as the current attempt, it is the POS's leg and leaves
 				// this list without a call to Mollie.
-				if ( Legacy_Adoption::is_adopted( $payment_id ) ) {
+				if ( Legacy_Adoption::owned_by_pro( $order, $payment_id ) ) {
 					PaymentAttempt::forget_abandoned( $order, $payment_id );
 					$results[ $payment_id ] = 'adopted';
 					continue;

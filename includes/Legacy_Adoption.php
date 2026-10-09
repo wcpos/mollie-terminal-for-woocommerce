@@ -31,32 +31,53 @@ final class Legacy_Adoption {
 
 	/**
 	 * The action reference Pro's provider uses for an attempt the old panel started: the Mollie
-	 * payment id of the order's current terminal attempt while it is still open. '' for a QR
-	 * attempt, a final one, or no attempt.
+	 * payment id of the order's current attempt while it is still open. '' for a final attempt or
+	 * none. A QR attempt counts too: adoption runs only while the page is Pro's panel, and a QR
+	 * payment left open when the QR methods were switched off must not sit beside a fresh charge.
 	 */
 	public static function action_ref( $order ): string {
 		$current = PaymentAttempt::current( $order );
-		if ( ! $current || 'pointofsale' !== (string) ( $current['method'] ?? '' ) || ! PaymentAttempt::is_non_final( (string) ( $current['status'] ?? '' ) ) ) {
+		if ( ! $current || ! PaymentAttempt::is_non_final( (string) ( $current['status'] ?? '' ) ) ) {
 			return '';
 		}
 		return (string) $current['payment_id'];
 	}
 
-	/** Whether Pro adopted this payment from the old panel; its outcome is then Pro's. */
+	/** Whether Pro adopted this payment from the old panel (its record exists, whatever became of the leg). */
 	public static function is_adopted( string $ref ): bool {
 		return '' !== $ref && function_exists( 'wcpos_pro_payment_id_for_action' ) && null !== wcpos_pro_payment_id_for_action( self::PROVIDER, $ref );
 	}
 
 	/**
-	 * Whether Pro adopted the attempt on this order: by its current payment, or by the reference
+	 * Whether Pro owns this payment now: adopted, and its ledger row still live (pending,
+	 * authorized or captured). Once Pro's leg has ended without money (voided, failed, expired)
+	 * the old paths may act on the payment again, as they did before adoption: a late result
+	 * Mollie delivers to the old webhook must still reach the order, and the old panel may take
+	 * the Legacy tab back when the QR methods are switched on later. The adoption record itself
+	 * is never cleared; the row's status is the truth. A record whose row cannot be read counts
+	 * as owned.
+	 */
+	public static function owned_by_pro( $order, string $ref ): bool {
+		if ( ! self::is_adopted( $ref ) ) {
+			return false;
+		}
+		if ( ! class_exists( '\WCPOS\WooCommercePOS\Payments\Contract\Ledger' ) ) {
+			return true;
+		}
+		$row = \WCPOS\WooCommercePOS\Payments\Contract\Ledger::instance()->find( $order, (string) wcpos_pro_payment_id_for_action( self::PROVIDER, $ref ) );
+		return null === $row || in_array( $row['status'] ?? '', \WCPOS\WooCommercePOS\Payments\Contract\Ledger::LIVE_STATUSES, true );
+	}
+
+	/**
+	 * Whether Pro owns the attempt on this order: by its current payment, or by the reference
 	 * kept at adoption, which outlives the current pointer.
 	 */
-	public static function is_adopted_order( $order ): bool {
+	public static function owns_order( $order ): bool {
 		if ( ! function_exists( 'wcpos_pro_payment_id_for_action' ) ) {
 			return false;
 		}
 		$current = PaymentAttempt::current( $order );
-		return self::is_adopted( (string) ( $current['payment_id'] ?? '' ) ) || self::is_adopted( (string) $order->get_meta( self::META_ADOPTED ) );
+		return self::owned_by_pro( $order, (string) ( $current['payment_id'] ?? '' ) ) || self::owned_by_pro( $order, (string) $order->get_meta( self::META_ADOPTED ) );
 	}
 
 	/**
@@ -142,22 +163,22 @@ final class Legacy_Adoption {
 					return null;
 				}
 				// The old paths complete a paid payment under their own per-order claim; while one
-				// holds it this attempt is mid-completion, and the caller tries again later.
+				// holds it this attempt is mid-completion, and the caller tries again later. Anything
+				// Pro refuses or throws is final for this order: logged, never retried on every request.
+				if ( ! PaymentLock::acquire( $order_id, 'complete_payment' ) ) {
+					return new \WP_Error( 'mtfwc_adoption_completing', 'A completion of this payment is in progress.' );
+				}
 				try {
-					return PaymentLock::with_lock(
-						$order_id,
-						'complete_payment',
-						static function () use ( $fresh, $ref ) {
-							$row = wcpos_pro_adopt_legacy_attempt( $fresh, Settings::GATEWAY_ID, $ref, (string) $fresh->get_total(), $fresh->get_currency() );
-							if ( is_array( $row ) ) {
-								$fresh->update_meta_data( self::META_ADOPTED, $ref );
-								$fresh->save();
-							}
-							return $row;
-						}
-					);
-				} catch ( \RuntimeException $e ) {
-					return new \WP_Error( 'mtfwc_adoption_completing', $e->getMessage() );
+					$row = wcpos_pro_adopt_legacy_attempt( $fresh, Settings::GATEWAY_ID, $ref, (string) $fresh->get_total(), $fresh->get_currency() );
+					if ( is_array( $row ) ) {
+						$fresh->update_meta_data( self::META_ADOPTED, $ref );
+						$fresh->save();
+					}
+					return $row;
+				} catch ( \Throwable $e ) {
+					return new \WP_Error( 'mtfwc_adoption_failed', $e->getMessage() );
+				} finally {
+					PaymentLock::release( $order_id, 'complete_payment' );
 				}
 			}
 		);
