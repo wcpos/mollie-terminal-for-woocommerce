@@ -4,7 +4,8 @@ namespace WCPOS\WooCommercePOS\MollieTerminal\Services;
 use RuntimeException;
 use WCPOS\WooCommercePOS\MollieTerminal\Logger;
 
-require_once __DIR__ . '/MollieUnansweredException.php'; // The client's own exception, loaded with it.
+require_once __DIR__ . '/MollieUnansweredException.php'; // The client's own exceptions, loaded with it.
+require_once __DIR__ . '/MollieNotFoundException.php';
 
 class MollieApiClient {
 	private const BASE_URL = 'https://api.mollie.com/v2';
@@ -58,9 +59,15 @@ class MollieApiClient {
 		if ( $code < 200 || $code >= 300 ) {
 			$message = $data['detail'] ?? $data['title'] ?? 'Mollie API error.';
 			Logger::log_api_error( sprintf( 'Mollie API error (%s %s, HTTP %d): %s', $method, $path, $code, $message ), array( 'method' => $method, 'path' => $path, 'status' => $code, 'body' => $data ) );
-			// A 5xx, a rate limit or a lock did not decide anything; any other 4xx is Mollie's answer.
-			if ( $code >= 500 || 429 === $code || 423 === $code ) {
+			// A 5xx or a rate limit did not decide anything, nor did a 409: Mollie answers it to a
+			// request replayed under an Idempotency-Key whose first request it is still processing,
+			// so the payment may be on its way. A 404 names a payment this key cannot see. Any other
+			// 4xx is Mollie's answer.
+			if ( $code >= 500 || 429 === $code || 409 === $code ) {
 				throw new MollieUnansweredException( $message );
+			}
+			if ( 404 === $code ) {
+				throw new MollieNotFoundException( $message );
 			}
 			throw new RuntimeException( $message );
 		}

@@ -13,7 +13,10 @@ require_once __DIR__ . '/../../includes/PaymentAttempt.php';
 require_once __DIR__ . '/../../includes/Services/MollieApiClient.php';
 require_once __DIR__ . '/../../includes/Services/MollieUnansweredException.php';
 require_once __DIR__ . '/../../includes/Services/TerminalService.php';
+require_once __DIR__ . '/../../includes/Logger.php';
 require_once __DIR__ . '/../../includes/RefundReconciler.php';
+if ( ! function_exists( 'wc_get_logger' ) ) { class SilentLoggerForServerRefund { public function log( $level, $message, $context = array() ) {} } function wc_get_logger() { return new SilentLoggerForServerRefund(); } }
+if ( ! function_exists( 'wp_json_encode' ) ) { function wp_json_encode( $value ) { return json_encode( $value ); } }
 expect( file_exists( __DIR__ . '/../../includes/Server/Mollie_Server_Provider.php' ), 'server adapter is missing' );
 require_once __DIR__ . '/../../includes/Server/Mollie_Server_Provider.php';
 use WCPOS\WooCommercePOS\MollieTerminal\Server\Mollie_Server_Provider as Provider;
@@ -27,12 +30,13 @@ class RefundOrder {
 }
 class WC_Order_Refund {
 	public $meta = array();
+	public $saved = array(); // the meta as persisted by each save()
 	public function get_id() { return 456; }
 	public function get_parent_id() { return 123; }
 	public function get_reason() { return 'Returned item'; }
 	public function get_meta( $key ) { return $this->meta[ $key ] ?? ''; }
 	public function update_meta_data( $key, $value ) { $this->meta[ $key ] = $value; }
-	public function save() {}
+	public function save() { $this->saved = $this->meta; }
 }
 class RefundClient extends MollieApiClient {
 	public $status;
@@ -47,8 +51,10 @@ class RefundClient extends MollieApiClient {
 		if ( $this->refreshed instanceof Exception ) { throw $this->refreshed; }
 		return array( 'id' => $refund_id, 'status' => $this->refreshed );
 	}
+	public $attempt_persisted_at_post = null;
 	public function create_refund( string $payment_id, array $payload ): array {
 		$this->calls[] = $payment_id;
+		$this->attempt_persisted_at_post = $GLOBALS['orders'][456]->saved[ RefundReconciler::META_ATTEMPT_ID ] ?? null;
 		expect( 'Returned item' === $payload['description'] && '5.00' === $payload['amount']['value'], 'refund amount/reason' );
 		if ( $this->status instanceof Exception ) { throw $this->status; }
 		return array( 'id' => 're_x', 'status' => $this->status );
@@ -80,7 +86,17 @@ expect( array( 'status' => 'succeeded', 'provider_ref' => 're_x' ) === $provider
 $orders[456] = new WC_Order_Refund();
 $client->status = new WCPOS\WooCommercePOS\MollieTerminal\Services\MollieUnansweredException( 'Response lost' );
 $result = $provider->refund( $row, 456, '5.00' );
-expect( is_wp_error( $result ) && true === $result->get_error_data()['indeterminate'], 'an unanswered refund is indeterminate, never failed' );
+expect( array( 'status' => 'pending', 'provider_ref' => null ) === $result, 'an unanswered refund is pending with its record kept, never an error WooCommerce would turn into a new record' );
+// The attempt id was persisted before the POST, so a retry on a fresh read of the record carries the
+// same id and finds the refund Mollie made by its metadata instead of creating a second one.
+$attempt = $client->attempt_persisted_at_post;
+expect( is_string( $attempt ) && '' !== $attempt && $attempt === $orders[456]->meta[ RefundReconciler::META_ATTEMPT_ID ], 'the attempt id is saved before the refund is posted' );
+$fresh = new WC_Order_Refund(); $fresh->meta = $orders[456]->saved; $orders[456] = $fresh;
+$client->refunds = array( array( 'id' => 're_lost', 'status' => 'refunded', 'metadata' => array( 'order_id' => '123', 'woo_refund_id' => '456', 'refund_attempt_id' => $attempt ) ) );
+$client->status = 'refunded';
+$client->calls = array();
+expect( array( 'status' => 'succeeded', 'provider_ref' => 're_lost' ) === $provider->refund( $row, 456, '5.00' ) && 2 === count( $client->calls ), 'the retry adopts the refund the lost response made and posts nothing' );
+$client->refunds = array();
 $orders[456] = new WC_Order_Refund();
 $orders[456]->meta[ RefundReconciler::META_ATTEMPT_ID ] = 'attempt';
 $client->refunds = array( array( 'id' => 're_found', 'status' => 'refunded', 'metadata' => array( 'order_id' => '123', 'woo_refund_id' => '456', 'refund_attempt_id' => 'attempt' ) ) );

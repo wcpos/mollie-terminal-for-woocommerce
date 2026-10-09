@@ -63,7 +63,6 @@ function wc_get_logger() { return new PayloadLogger(); }
 function wp_remote_request( $url, $args ) { $GLOBALS['http'][] = array( $url, $args ); return $GLOBALS['http_answer'] ?? array(); }
 function wp_remote_retrieve_response_code( $response ) { return $response['code'] ?? 201; }
 function wp_remote_retrieve_body( $response ) { return $response['body'] ?? '{"id":"tr_x"}'; }
-function is_wp_error_answer( $answer ) { return $answer instanceof WP_Error; }
 require_once __DIR__ . '/../../includes/Logger.php';
 $real = new MollieApiClient( 'test_fixture' );
 $real->create_payment( $payload, array(), $row['id'] );
@@ -71,11 +70,14 @@ $real->create_payment( $payload );
 expect( $row['id'] === $http[0][1]['headers']['Idempotency-Key'], 'HTTP idempotency header' );
 expect( ! isset( $http[1][1]['headers']['Idempotency-Key'] ), 'legacy requests omit idempotency header' );
 expect( 'Bearer test_fixture' === $http[0][1]['headers']['Authorization'], 'auth header preserved' );
-// A transport loss, a 5xx, a 429 or a 423 did not decide anything; any other 4xx is Mollie's answer.
-foreach ( array( array( new WP_Error( 'http_request_failed', 'timeout' ), true ), array( array( 'code' => 503, 'body' => '{"detail":"down"}' ), true ), array( array( 'code' => 429, 'body' => '{"detail":"slow down"}' ), true ), array( array( 'code' => 423, 'body' => '{"detail":"locked"}' ), true ), array( array( 'code' => 422, 'body' => '{"detail":"invalid"}' ), false ), array( array( 'code' => 404, 'body' => '{"detail":"gone"}' ), false ) ) as $case ) {
+// A transport loss, a 5xx, a 429 or a 409 (an idempotent replay Mollie is still processing) did not
+// decide anything; any other 4xx is Mollie's answer, a 404 by name.
+foreach ( array( array( new WP_Error( 'http_request_failed', 'timeout' ), true ), array( array( 'code' => 503, 'body' => '{"detail":"down"}' ), true ), array( array( 'code' => 429, 'body' => '{"detail":"slow down"}' ), true ), array( array( 'code' => 423, 'body' => '{"detail":"locked"}' ), false ), array( array( 'code' => 409, 'body' => '{"detail":"The idempotency key is in use by a request still being processed"}' ), true ), array( array( 'code' => 422, 'body' => '{"detail":"invalid"}' ), false ), array( array( 'code' => 404, 'body' => '{"detail":"gone"}' ), false ) ) as $case ) {
 	list( $GLOBALS['http_answer'], $unanswered ) = $case;
 	try { $real->create_payment( $payload, array(), $row['id'] ); expect( false, 'an error answer must throw' ); } catch ( Exception $e ) {
 		expect( $unanswered === ( $e instanceof WCPOS\WooCommercePOS\MollieTerminal\Services\MollieUnansweredException ), 'unanswered vs refused: ' . json_encode( $GLOBALS['http_answer'] instanceof WP_Error ? 'transport' : $GLOBALS['http_answer']['code'] ) );
 	}
 }
+$GLOBALS['http_answer'] = array( 'code' => 404, 'body' => '{"detail":"No payment exists with token tr_nope."}' );
+try { $real->get_payment( 'tr_nope' ); expect( false, 'a 404 must throw' ); } catch ( Exception $e ) { expect( $e instanceof WCPOS\WooCommercePOS\MollieTerminal\Services\MollieNotFoundException, 'a 404 is named' ); }
 echo "server-create-action-payload ok\n";

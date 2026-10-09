@@ -25,7 +25,14 @@ class RefundReconciler {
 			$payment = $this->client->get_payment( $payment_id );
 			$refunds = $this->refund_items( $this->client->list_refunds( $payment_id ) );
 			$attempt_id = $woo_refund->get_meta( self::META_ATTEMPT_ID );
-			if ( ! $attempt_id ) { $attempt_id = function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'refund_', true ); $woo_refund->update_meta_data( self::META_ATTEMPT_ID, $attempt_id ); }
+			if ( ! $attempt_id ) {
+				// Saved before the POST: a response Mollie loses after creating the refund is retried
+				// under this same id, and the retry finds that refund by its metadata instead of
+				// creating a second one. An unsaved id would be a new id on a fresh read.
+				$attempt_id = function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'refund_', true );
+				$woo_refund->update_meta_data( self::META_ATTEMPT_ID, $attempt_id );
+				$woo_refund->save();
+			}
 			foreach ( $refunds as $refund ) {
 				$meta = $refund['metadata'] ?? array();
 				if ( (string) ( $meta['order_id'] ?? '' ) === (string) $order->get_id() && (string) ( $meta['woo_refund_id'] ?? '' ) === (string) $woo_refund->get_id() && (string) ( $meta['refund_attempt_id'] ?? '' ) === (string) $attempt_id ) {

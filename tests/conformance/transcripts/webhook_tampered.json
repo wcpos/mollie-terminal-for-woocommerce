@@ -17,7 +17,7 @@
         },
         {
             "op": "webhook",
-            "request": "action=action_1 event=payment.updated"
+            "request": "action=action_2 event=payment.updated"
         }
     ]
 }

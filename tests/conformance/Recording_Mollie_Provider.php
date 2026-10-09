@@ -24,11 +24,15 @@ final class Recording_Mollie_Provider extends Mollie_Server_Provider {
 	 */
 	public static $fixture;
 
-	/** {@inheritDoc} */
+	/**
+	 * {@inheritDoc}
+	 *
+	 * Recorded once the call has been made: the action a create names is the payment Mollie made
+	 * for the row's Idempotency-Key (the fake knows it even when the response was lost), which
+	 * does not exist before the call. A create Mollie refused names no action.
+	 */
 	public function create_reader_action( array $row, string $reader_id ) {
-		$result = parent::create_reader_action( $row, $reader_id );
-		// Mollie honours the Idempotency-Key (the row id): the payment a lost response created is
-		// the one a replay gets back, so the fake knows it even when the adapter does not.
+		$result  = parent::create_reader_action( $row, $reader_id );
 		$payment = self::$fixture->transport->payment_for_key( (string) $row['id'] ) ?? '';
 		self::$fixture->record( 'create', $payment, 'amount=' . $row['amount'] . ' currency=' . $row['currency'] . ' reader=' . $reader_id . ' mode=' . self::mode() );
 		return $result;
@@ -36,25 +40,22 @@ final class Recording_Mollie_Provider extends Mollie_Server_Provider {
 
 	/** {@inheritDoc} */
 	public function fetch( string $ref ) {
-		self::$fixture->transport->advance( $ref );
-		$result = parent::fetch( $ref );
 		self::$fixture->record( 'fetch', $ref, 'mode=' . self::mode() );
-		return $result;
+		self::$fixture->transport->advance( $ref );
+		return parent::fetch( $ref );
 	}
 
 	/** {@inheritDoc} */
 	public function cancel( string $ref ) {
-		$result = parent::cancel( $ref );
 		self::$fixture->record( 'cancel', $ref, 'mode=' . self::mode() );
-		return $result;
+		return parent::cancel( $ref );
 	}
 
 	/** {@inheritDoc} */
 	public function refund( array $row, int $refund_id, string $amount ) {
-		$result  = parent::refund( $row, $refund_id, $amount );
 		$payment = (string) ( $row['provider_refs']['action'] ?? $row['provider_refs']['transaction_id'] ?? '' );
 		self::$fixture->record( 'refund', $payment, 'amount=' . $amount . ' currency=' . $row['currency'] . ' mode=' . self::mode() . ' transaction_id=' . self::$fixture->alias( $payment ) );
-		return $result;
+		return parent::refund( $row, $refund_id, $amount );
 	}
 
 	/** {@inheritDoc} */

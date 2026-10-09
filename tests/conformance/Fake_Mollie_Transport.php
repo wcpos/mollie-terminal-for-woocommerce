@@ -24,7 +24,6 @@ final class Fake_Mollie_Transport {
 	private $refund_status = 'refunded';
 	private $cancelable = true;
 	private $lost = false;
-	private $tampered = array();
 	private $seq = 0;
 
 	public function __construct() {
@@ -60,11 +59,6 @@ final class Fake_Mollie_Transport {
 	/** A provider-side outcome (what a delivery reports). */
 	public function observe( string $id, string $state ): void {
 		$this->apply_state( $this->payments[ $id ], $state );
-	}
-
-	/** The next read of this payment reports the other mode: a delivery not for this store. */
-	public function tamper( string $id ): void {
-		$this->tampered[ $id ] = true;
 	}
 
 	/** The payment a create keyed on this row id made, even when its response was lost. */
@@ -196,15 +190,10 @@ final class Fake_Mollie_Transport {
 		$entry  = $this->payments[ $id ];
 		$state  = $entry['state'];
 		$status = in_array( $state, array( 'short', 'usd' ), true ) ? 'paid' : $state;
-		$mode   = 'live';
-		if ( ! empty( $this->tampered[ $id ] ) ) {
-			unset( $this->tampered[ $id ] );
-			$mode = 'test';
-		}
 		$payment = array(
 			'resource'     => 'payment',
 			'id'           => $id,
-			'mode'         => $mode,
+			'mode'         => 'live',
 			'createdAt'    => gmdate( 'c', $entry['created'] ),
 			'status'       => $status,
 			'isCancelable' => $this->open( $entry ) && $entry['cancelable'],

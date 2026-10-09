@@ -25,7 +25,7 @@ require_once __DIR__ . '/Recording_Mollie_Provider.php';
  *   the adapter then reports `requested` and polling decides.
  * - `webhook`, `webhook_money_only`: Mollie's delivery is an unsigned payment id; the adapter settles
  *   only money it has confirmed through the authenticated read, and a non-money outcome is left to
- *   polling. A delivery for a payment in the other mode is refused.
+ *   polling. A forged id names a payment this key cannot see (404), and is refused as unknown.
  * - `refund`, `partial_refund`: refunds are asynchronous (queued/pending/refunded), so `refund_pending`
  *   is a real state.
  * - `expiry`: Mollie expires an unpaid point-of-sale payment itself.
@@ -124,8 +124,8 @@ final class Mollie_Conformance_Fixture implements Conformance_Fixture {
 		$this->transport->observe( $id, $states[ $event ] );
 		if ( $tampered ) {
 			// Mollie signs nothing: a delivery is a payment id, and the authenticated read is the
-			// evidence. A payment of the other mode is not this store's.
-			$this->transport->tamper( $id );
+			// evidence. A forged id names a payment this store's key cannot see: Mollie answers 404.
+			$id = 'tr_forged000';
 		}
 		$request = new \WP_REST_Request( 'POST', Payments_Webhook_Controller::ROUTE );
 		$request->set_query_params( array( 'provider' => 'mollie' ) );
@@ -135,8 +135,11 @@ final class Mollie_Conformance_Fixture implements Conformance_Fixture {
 		return $request;
 	}
 
-	/** One stable alias per Mollie payment. */
+	/** One stable alias per Mollie payment; no payment (a refused create) is `none`. */
 	public function alias( string $ref ): string {
+		if ( '' === $ref ) {
+			return 'none';
+		}
 		if ( ! isset( $this->aliases[ $ref ] ) ) {
 			$this->aliases[ $ref ] = 'action_' . ( count( $this->aliases ) + 1 );
 		}

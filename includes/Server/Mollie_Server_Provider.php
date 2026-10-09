@@ -3,9 +3,11 @@ namespace WCPOS\WooCommercePOS\MollieTerminal\Server;
 
 use InvalidArgumentException;
 use RuntimeException;
+use WCPOS\WooCommercePOS\MollieTerminal\Logger;
 use WCPOS\WooCommercePOS\MollieTerminal\RefundReconciler;
 use WCPOS\WooCommercePOS\MollieTerminal\Settings;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieApiClient;
+use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieNotFoundException;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieUnansweredException;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\TerminalService;
 use WCPOS\WooCommercePOS\MollieTerminal\Utils\Money;
@@ -154,9 +156,13 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 			$statuses = array( 'refunded' => 'succeeded', 'queued' => 'pending', 'pending' => 'pending', 'processing' => 'pending', 'failed' => 'failed', 'canceled' => 'failed' );
 			return array( 'status' => $statuses[ $result['mollie_status'] ] ?? 'pending', 'provider_ref' => $result['refund_id'] ?: null );
 		} catch ( MollieUnansweredException $e ) {
-			// The refund may have been created: not a failure. A retry finds it by its metadata
-			// (order, refund record and attempt id) instead of creating another.
-			return $this->indeterminate( 'mollie_unanswered', $e->getMessage() );
+			// The refund may have been created. An error here would make WooCommerce delete the
+			// refund record, and a later refund would be a new record Mollie's metadata cannot be
+			// matched to: a second refund. So the record stands as pending, its attempt id saved
+			// before the POST, and the next ask for this record finds the refund Mollie made by that
+			// metadata (or, if none was made, creates it under the same attempt id).
+			Logger::log( 'Mollie did not answer a refund request; the refund record stays pending until Mollie is asked again.', array( 'refund_id' => $refund_id, 'message' => $e->getMessage() ), 'warning' );
+			return array( 'status' => 'pending', 'provider_ref' => null );
 		} catch ( RuntimeException | InvalidArgumentException $e ) {
 			return self::provider_error( $e->getMessage() );
 		}
@@ -171,6 +177,9 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 		try {
 			// The authenticated fetch, not the posted body, is the payment evidence.
 			$payment = $this->client->get_payment( $id );
+		} catch ( MollieNotFoundException $e ) {
+			// A forged or foreign id: this key sees no such payment, and nothing is settled.
+			return new \WP_Error( 'mollie_webhook_unknown_payment', __( 'Unknown POS payment.', 'mollie-terminal-for-woocommerce' ), array( 'status' => 404 ) );
 		} catch ( RuntimeException | InvalidArgumentException $e ) {
 			return self::provider_error( $e->getMessage() );
 		}
