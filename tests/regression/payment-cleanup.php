@@ -25,6 +25,7 @@ require_once __DIR__ . '/../../includes/PaymentLock.php';
 require_once __DIR__ . '/../../includes/Utils/Money.php';
 require_once __DIR__ . '/../../includes/PaymentReconciler.php';
 require_once __DIR__ . '/../../includes/Services/MolliePaymentService.php';
+require_once __DIR__ . '/../../includes/Legacy_Adoption.php';
 require_once __DIR__ . '/../../includes/PaymentCleanup.php';
 
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentAttempt;
@@ -38,6 +39,7 @@ class FakeOrderForCleanup {
 	public function get_id() { return 321; }
 	public $status = 'processing';
 	public function get_status() { return $this->status; }
+	public function get_transaction_id() { return ''; }
 	public $payment_method = '';
 	public $payment_method_title = '';
 	public function get_payment_method() { return $this->payment_method; }

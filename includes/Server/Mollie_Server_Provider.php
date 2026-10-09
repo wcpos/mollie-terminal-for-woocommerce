@@ -88,7 +88,9 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 			'status' => $statuses[ $status ] ?? 'failed',
 			'amount' => $payment['amount']['value'] ?? null,
 			'currency' => $payment['amount']['currency'] ?? null,
-			'provider_refs' => array( 'mollie_payment' => $payment['id'], 'mollie_mode' => $payment['mode'] ?? null ),
+			// `transaction_id` is what Free copies into the order's transaction id on capture, as the
+			// old panel did, so refunds and "Payment via" read the same Mollie payment id.
+			'provider_refs' => array( 'mollie_payment' => $payment['id'], 'transaction_id' => $payment['id'], 'mollie_mode' => $payment['mode'] ?? null ),
 			'receipt' => self::receipt( $payment ),
 		);
 		if ( isset( $payment['details']['terminalId'] ) ) { $result['provider_refs']['reader'] = $payment['details']['terminalId']; }
@@ -164,9 +166,11 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 	public static function webhook_patch( array $payment ): array {
 		$patch = array( 'event_id' => $payment['id'] . ':' . $payment['status'] );
 		if ( 'paid' === $payment['status'] ) {
-			$patch += array( 'status' => 'captured', 'amount' => $payment['amount']['value'] ?? null, 'currency' => $payment['amount']['currency'] ?? null, 'receipt' => self::receipt( $payment ) );
+			// Settlement replaces the row's refs with the patch's, so a capture carries the complete
+			// set: the action and reader Pro keeps, and the transaction id Free copies onto the
+			// order, which a leg settled by webhook before any poll would otherwise lack.
+			$patch += array( 'status' => 'captured', 'amount' => $payment['amount']['value'] ?? null, 'currency' => $payment['amount']['currency'] ?? null, 'provider_refs' => array( 'action' => $payment['id'] ) + self::normalize( $payment )['provider_refs'], 'receipt' => self::receipt( $payment ) );
 		}
-		// Settlement replaces refs; omit them to preserve Pro's action and reader.
 		return $patch;
 	}
 

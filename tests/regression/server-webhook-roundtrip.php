@@ -23,7 +23,7 @@ class WebhookClient extends MollieApiClient {
 $client = new WebhookClient();
 $provider = new Provider( null, $client );
 $uuid = 'ABCDEF12-1234-1234-ABCD-123456789ABC';
-$paid = array( 'id' => 'tr_x', 'status' => 'paid', 'mode' => 'test', 'amount' => array( 'value' => '12.50', 'currency' => 'EUR' ), 'metadata' => array( 'wcpos_payment_id' => $uuid ), 'details' => array( 'cardLabel' => 'Visa' ) );
+$paid = array( 'id' => 'tr_x', 'status' => 'paid', 'mode' => 'test', 'amount' => array( 'value' => '12.50', 'currency' => 'EUR' ), 'metadata' => array( 'wcpos_payment_id' => $uuid ), 'details' => array( 'cardLabel' => 'Visa', 'terminalId' => 'term_A' ) );
 $client->payment = $paid;
 $request = new WP_REST_Request();
 $request->set_param( 'id', 'tr_x' );
@@ -31,12 +31,12 @@ $r = $provider->verify_webhook( $request );
 expect( ! is_wp_error( $r ), 'paid webhook verified' );
 wcpos_settle_payment( $r['payment_id'], $r['patch'] );
 expect( strtolower( $uuid ) === $settlements[0][0], 'UUID lowercased' );
-expect( array( 'event_id' => 'tr_x:paid', 'status' => 'captured', 'amount' => '12.50', 'currency' => 'EUR', 'receipt' => array( 'card_label' => 'Visa', 'mollie_payment' => 'tr_x' ) ) === $settlements[0][1], 'money patch and receipt without provider_refs' );
+expect( array( 'event_id' => 'tr_x:paid', 'status' => 'captured', 'amount' => '12.50', 'currency' => 'EUR', 'provider_refs' => array( 'action' => 'tr_x', 'mollie_payment' => 'tr_x', 'transaction_id' => 'tr_x', 'mollie_mode' => 'test', 'reader' => 'term_A' ), 'receipt' => array( 'card_label' => 'Visa', 'mollie_payment' => 'tr_x' ) ) === $settlements[0][1], 'a capture carries the complete refs (action and reader kept, transaction id for the order) and the receipt' );
 foreach ( array( 'open', 'pending', 'authorized', 'canceled', 'expired', 'failed', 'unknown' ) as $status ) {
 	$client->payment['status'] = $status;
 	$r = $provider->verify_webhook( $request );
 	wcpos_settle_payment( $r['payment_id'], $r['patch'] );
-	expect( array( 'event_id' => 'tr_x:' . $status ) === $r['patch'], 'non-money webhook cannot force lifecycle: ' . $status );
+	expect( array( 'event_id' => 'tr_x:' . $status ) === $r['patch'], 'non-money webhook cannot force lifecycle, and carries no refs: ' . $status );
 }
 $calls = $client->calls;
 $request->set_param( 'id', 'tr_../invalid' );

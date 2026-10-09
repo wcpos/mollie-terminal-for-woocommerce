@@ -17,7 +17,8 @@ function is_checkout_pay_page() { return true; }
 function wp_hash( $data ) { return hash( 'sha256', $data ); }
 function wp_salt( $scheme = '' ) { return 'test-salt'; }
 
-$GLOBALS['mtfwc_test_options'] = array( 'default_terminal_id' => 'term_default_for_test', 'show_logs' => 'no' );
+// The old panel renders under the QR carve-out only; order-pay-panel-is-pro.php covers Pro's panel.
+$GLOBALS['mtfwc_test_options'] = array( 'default_terminal_id' => 'term_default_for_test', 'show_logs' => 'no', 'qr_methods' => array( 'ideal' ) );
 function get_option( $key, $default = array() ) { return $GLOBALS['mtfwc_test_options']; }
 function admin_url( $path = '' ) { return 'https://example.test/wp-admin/' . ltrim( $path, '/' ); }
 function add_query_arg( array $args, $url ) { return $url . '?' . http_build_query( $args ); }
@@ -52,8 +53,13 @@ function wc_get_order( $order_id ) { return 123 === (int) $order_id ? $GLOBALS['
 
 $GLOBALS['wp'] = (object) array( 'query_vars' => array( 'order-pay' => 123 ) );
 
+require_once __DIR__ . '/stubs/ledger.php';
+function wcpos_pro_payment_id_for_action( $provider, $ref ) { return $GLOBALS['adopted_map'][ $ref ] ?? null; }
+$GLOBALS['adopted_map'] = array();
+$GLOBALS['ledger_rows'] = array();
 require_once __DIR__ . '/../../includes/Settings.php';
 require_once __DIR__ . '/../../includes/PaymentAttempt.php';
+require_once __DIR__ . '/../../includes/Legacy_Adoption.php';
 require_once __DIR__ . '/../../includes/AjaxHandler.php';
 require_once __DIR__ . '/../../includes/Server/Registration.php';
 require_once __DIR__ . '/../../includes/Gateway.php';
@@ -117,6 +123,18 @@ expect( false !== strpos( $html, 'data-resume="1"' ), 'an unpaid order with a pa
 $GLOBALS['mtfwc_test_order']->meta[ PaymentAttempt::META_CURRENT_PAYMENT_STATUS ] = 'canceled';
 $html = render_fields();
 expect( false !== strpos( $html, 'data-resume="0"' ), 'a canceled attempt should not resume' );
+// roadmap#95: an open attempt WooCommerce POS adopted (while the page was Pro's panel) is not
+// resumed while Pro's leg is live; once that leg has ended the old panel resumes it as before.
+$GLOBALS['mtfwc_test_order']->meta[ PaymentAttempt::META_CURRENT_PAYMENT_STATUS ] = 'open';
+$GLOBALS['adopted_map'] = array( 'tr_open_test' => 'row-1' );
+$GLOBALS['ledger_rows'] = array( 123 => array( array( 'id' => 'row-1', 'status' => 'pending' ) ) );
+$html = render_fields();
+expect( false !== strpos( $html, 'data-resume="0"' ) && false !== strpos( $html, 'data-mtfwc-mode="start"' ), 'a leg WooCommerce POS owns is not resumed by the old panel' );
+$GLOBALS['ledger_rows'][123][0]['status'] = 'voided';
+$html = render_fields();
+expect( false !== strpos( $html, 'data-resume="1"' ), 'once Pro\'s leg has ended the old panel resumes the attempt' );
+$GLOBALS['adopted_map'] = array();
+$GLOBALS['ledger_rows'] = array();
 
 // --- Paid order: no resume even with a lingering attempt pointer. ------------
 $GLOBALS['mtfwc_test_order']->paid = true;

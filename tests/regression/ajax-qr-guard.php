@@ -34,6 +34,7 @@ function wp_send_json_success( $data = null, $status_code = null ) { throw new J
 
 require_once __DIR__ . '/../../includes/Logger.php';
 require_once __DIR__ . '/../../includes/Settings.php';
+require_once __DIR__ . '/../../includes/Legacy_Adoption.php';
 require_once __DIR__ . '/../../includes/AjaxHandler.php';
 
 use WCPOS\WooCommercePOS\MollieTerminal\AjaxHandler;
@@ -53,9 +54,9 @@ function start_qr( array $settings, string $method ): JsonResponseForQrGuard {
 	exit( 1 );
 }
 
+// With no QR method enabled the page is Pro's panel: an old-panel start is refused outright.
 $disabled = start_qr( array(), 'ideal' );
-expect( 400 === $disabled->status, 'QR start must be rejected when no QR method is enabled' );
-expect( 'QR code payments are not enabled for this method.' === $disabled->data, 'the rejection should say QR is not enabled' );
+expect( 409 === $disabled->status, 'with no QR method enabled the old panel may not start anything' );
 
 $other = start_qr( array( 'qr_methods' => array( 'bancontact' ) ), 'ideal' );
 expect( 400 === $other->status, 'QR start must be rejected for a method the merchant did not enable' );

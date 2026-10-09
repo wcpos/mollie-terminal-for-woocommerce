@@ -43,7 +43,9 @@ foreach ( $cases as $case ) {
 	expect( $expected === $gateway->is_available(), $message );
 }
 
-// The old panel's script is enqueued on the order-pay page only.
+// The old panel's script is enqueued on the order-pay page only, and only under the QR carve-out
+// (order-pay-panel-is-pro.php covers Pro's panel enqueuing nothing).
+$GLOBALS['options']['woocommerce_mollie_terminal_for_woocommerce_settings']['qr_methods'] = array( 'ideal' );
 foreach ( array( true => array( 'mtfwc-payment', 'mtfwc-payment' ), false => array() ) as $pay_page => $expected ) {
 	$GLOBALS['order_pay'] = (bool) $pay_page;
 	$GLOBALS['enqueued'] = array();
