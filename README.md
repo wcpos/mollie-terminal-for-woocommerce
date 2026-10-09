@@ -51,11 +51,15 @@ only one (the old WooCommerce → Payments "enable for web checkout" setting is 
 Cashiers send the selected payment amount to a reader from the tile; terminal tips are recorded as an order fee.
 Manage **Default terminal**, **Enabled terminals** and **Lock terminal selection** under WooCommerce → Settings → Payments → Mollie Terminal.
 These fields are mirrored into POS reader settings when saved; initial migration preserves existing POS reader choices.
-The **Legacy** tab (the POS order-pay page) is unchanged, and iDEAL/Bancontact QR payments remain there only.
+The **Legacy** tab (the POS order-pay page) runs through the POS's shared order-pay panel, so a
+Legacy-tab payment is tracked like a keypad payment, unless an on-screen QR method is enabled
+(next section): then the plugin's own panel stays, because a QR code has no home in the shared
+panel yet. Attempts the old panel left mid-flight when the plugin is updated are folded into the
+POS once, so they complete or cancel through the POS.
 
-## Legacy checkout flow
+## The plugin's own order-pay panel (QR carve-out)
 
-At checkout the cashier optionally picks a terminal from the dropdown (defaults
+With a QR method enabled, at checkout the cashier optionally picks a terminal from the dropdown (defaults
 to the configured one) and clicks **Start Terminal Payment**. The plugin then:
 
 - shows `Sending to terminal…` → `Waiting for terminal…`,
@@ -76,7 +80,8 @@ terminal payment is stopped and canceled.
 Merchants in the Netherlands and Belgium can also let customers pay by scanning
 an on-screen iDEAL or Bancontact QR code with their banking app. Enable the
 methods you accept under **WooCommerce → Settings → Payments → Mollie Terminal
-→ QR code payments**. The cashier can then switch the checkout panel from
+→ QR code payments**. While any is enabled the Legacy tab keeps the plugin's own
+panel (the shared POS panel cannot show a QR code yet): the cashier can switch it from
 **Terminal** to **QR code**, choose a method when both are enabled, and click
 **Show QR code**.
 
@@ -87,7 +92,7 @@ Mollie test API key; Bancontact QR requires live mode. Bancontact caps QR
 payments at €1,500.00 per transaction (a scheme limit, not a plugin one); for
 larger totals use the terminal.
 
-## Legacy stale payment cleanup
+## Stale payment cleanup (the plugin's own panel)
 
 A Mollie `pointofsale` payment can stay "open" on the Mollie side if the flow
 is abandoned. The plugin actively cancels open payments when:

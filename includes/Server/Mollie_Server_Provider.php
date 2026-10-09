@@ -88,7 +88,9 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 			'status' => $statuses[ $status ] ?? 'failed',
 			'amount' => $payment['amount']['value'] ?? null,
 			'currency' => $payment['amount']['currency'] ?? null,
-			'provider_refs' => array( 'mollie_payment' => $payment['id'], 'mollie_mode' => $payment['mode'] ?? null ),
+			// `transaction_id` is what Free copies into the order's transaction id on capture, as the
+			// old panel did, so refunds and "Payment via" read the same Mollie payment id.
+			'provider_refs' => array( 'mollie_payment' => $payment['id'], 'transaction_id' => $payment['id'], 'mollie_mode' => $payment['mode'] ?? null ),
 			'receipt' => self::receipt( $payment ),
 		);
 		if ( isset( $payment['details']['terminalId'] ) ) { $result['provider_refs']['reader'] = $payment['details']['terminalId']; }

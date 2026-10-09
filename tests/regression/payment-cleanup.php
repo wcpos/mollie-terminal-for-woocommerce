@@ -25,6 +25,7 @@ require_once __DIR__ . '/../../includes/PaymentLock.php';
 require_once __DIR__ . '/../../includes/Utils/Money.php';
 require_once __DIR__ . '/../../includes/PaymentReconciler.php';
 require_once __DIR__ . '/../../includes/Services/MolliePaymentService.php';
+require_once __DIR__ . '/../../includes/Legacy_Adoption.php';
 require_once __DIR__ . '/../../includes/PaymentCleanup.php';
 
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentAttempt;

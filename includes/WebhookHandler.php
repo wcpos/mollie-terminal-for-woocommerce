@@ -13,10 +13,22 @@ class WebhookHandler {
 	}
 
 	public function handle(): void {
-		$payment_id = sanitize_text_field( wp_unslash( $_POST['id'] ?? $_GET['id'] ?? '' ) );
+		$this->process( sanitize_text_field( wp_unslash( $_POST['id'] ?? $_GET['id'] ?? '' ) ) );
+		status_header( 200 ); echo 'OK'; exit;
+	}
+
+	/** Reconcile one delivery; every outcome is acknowledged, so Mollie stops retrying. */
+	public function process( string $payment_id ): void {
 		if ( '' === $payment_id ) {
 			Logger::log( 'Mollie webhook received without payment ID.', array(), 'warning' );
-			status_header( 200 ); echo 'OK'; exit;
+			return;
+		}
+		// An attempt Pro adopted on upgrade is Pro's leg: Pro's poll settles it from Mollie's
+		// authenticated state within a poll interval, and this handler writes nothing. The local
+		// lookup runs before any call to Mollie.
+		if ( Legacy_Adoption::is_adopted( $payment_id ) ) {
+			Logger::log( 'Mollie webhook for an attempt WooCommerce POS adopted; left to the POS.', array( 'payment_id' => $payment_id ), 'info' );
+			return;
 		}
 		Logger::log( 'Mollie webhook received.', array( 'payment_id' => $payment_id ), 'info' );
 		try {
@@ -25,14 +37,13 @@ class WebhookHandler {
 			$order = $this->find_order_for_payment( $payment_id, $payment );
 			if ( ! $order ) {
 				Logger::log( 'Mollie webhook received for unknown payment.', array( 'payment_id' => $payment_id ), 'warning' );
-				status_header( 200 ); echo 'OK'; exit;
+				return;
 			}
 			( new PaymentReconciler( $settings ) )->reconcile( $order, $payment, 'webhook' );
 			Logger::log( 'Mollie webhook reconciled.', array( 'payment_id' => $payment_id, 'order_id' => (int) $order->get_id(), 'status' => $payment['status'] ?? '' ), 'success' );
 		} catch ( Exception $e ) {
 			Logger::log( 'Mollie webhook failed: ' . $e->getMessage(), array( 'payment_id' => $payment_id ), 'error' );
 		}
-		status_header( 200 ); echo 'OK'; exit;
 	}
 
 	private function find_order_for_payment( string $payment_id, array $payment ) {

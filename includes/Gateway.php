@@ -221,12 +221,32 @@ class Gateway extends WC_Payment_Gateway {
 		}
 	}
 
+	/**
+	 * Whether the POS order-pay page runs through Pro's shared panel.
+	 *
+	 * QR carve-out (roadmap#95, 2026-10-09): while on-screen QR methods (iDEAL, Bancontact) are
+	 * enabled the merchant keeps Mollie's own panel, because a QR code has no home in Pro's
+	 * panel yet. With none enabled, the shared panel takes the page and the payment becomes a
+	 * ledger row, like a keypad payment.
+	 */
+	private function uses_pro_panel(): bool {
+		return array() === ( new Settings() )->qr_methods();
+	}
+
 	public function payment_fields(): void {
 		global $wp;
 
 		$description = apply_filters( 'woocommerce_gateway_description', $this->get_option( 'description' ), $this->id );
 		if ( $description ) {
 			echo '<p>' . wp_kses_post( $description ) . '</p>';
+		}
+
+		if ( $this->uses_pro_panel() ) {
+			$order = wc_get_order( isset( $wp->query_vars['order-pay'] ) ? absint( $wp->query_vars['order-pay'] ) : 0 );
+			if ( $order instanceof \WC_Order ) {
+				wcpos_pro_order_pay_panel( $this, $order );
+			}
+			return;
 		}
 
 		$settings = new Settings();
@@ -375,8 +395,9 @@ class Gateway extends WC_Payment_Gateway {
 	private function row( string $label, string $value ): void { echo '<tr><th>' . esc_html( $label ) . '</th><td><code>' . esc_html( $value ) . '</code></td></tr>'; }
 	public function enqueue_admin_scripts(): void { wp_enqueue_script( 'mtfwc-admin', MTFWC_PLUGIN_URL . 'assets/js/admin.js', array( 'jquery' ), MTFWC_VERSION, true ); }
 	public function enqueue_payment_scripts(): void {
-		// The panel exists on the order-pay page only; the shop's checkout never offers the gateway.
-		if ( ! function_exists( 'is_checkout_pay_page' ) || ! is_checkout_pay_page() ) {
+		// The old panel exists on the order-pay page only, and only under the QR carve-out; the
+		// shop's checkout never offers the gateway, and Pro's panel brings its own script.
+		if ( ! function_exists( 'is_checkout_pay_page' ) || ! is_checkout_pay_page() || $this->uses_pro_panel() ) {
 			return;
 		}
 		wp_enqueue_script( 'mtfwc-payment', MTFWC_PLUGIN_URL . 'assets/js/payment.js', array(), MTFWC_VERSION, true );
@@ -436,6 +457,13 @@ class Gateway extends WC_Payment_Gateway {
 		if ( ! $order ) {
 			return array( 'result' => 'failure' );
 		}
+		if ( $order->is_paid() ) {
+			return array( 'result' => 'success', 'redirect' => AjaxHandler::order_return_url( $order ) );
+		}
+		if ( $this->uses_pro_panel() ) {
+			// Pro's panel drives the leg and reads the ledger; it answers the form submit.
+			return wcpos_pro_order_pay_process( $order );
+		}
 		if ( ! $order->is_paid() ) {
 			try {
 				$settings = new Settings();
@@ -458,5 +486,60 @@ class Gateway extends WC_Payment_Gateway {
 		return array( 'result' => 'failure' );
 	}
 
-	public function process_refund( $order_id, $amount = null, $reason = '' ) { $order = wc_get_order( $order_id ); if ( ! $order ) { return new \WP_Error( 'mtfwc_invalid_order', __( 'Invalid order.', 'mollie-terminal-for-woocommerce' ) ); } return ( new RefundHandler( new MollieApiClient( ( new Settings() )->api_key() ) ) )->process_refund( $order, $amount, $reason ); }
+	public function process_refund( $order_id, $amount = null, $reason = '' ) {
+		$order = wc_get_order( $order_id );
+		if ( ! $order ) { return new \WP_Error( 'mtfwc_invalid_order', __( 'Invalid order.', 'mollie-terminal-for-woocommerce' ) ); }
+		// A leg Pro drove refunds through Pro. When the order also carries an old-panel payment
+		// and Pro cannot allocate the amount across its rows (it refuses before moving money),
+		// the old path refunds that payment; Mollie caps it at the payment.
+		$legacy = $this->legacy_payment_id( $order );
+		if ( $this->has_counting_row( $order ) ) {
+			$result = wcpos_pro_order_pay_refund( $order, $amount, $reason );
+			if ( ! is_wp_error( $result ) || 'wcpos_refund_not_allocatable' !== $result->get_error_code() || '' === $legacy ) {
+				return $result;
+			}
+		}
+		if ( '' === $legacy ) { return new \WP_Error( 'mtfwc_refund_not_found', __( 'No Mollie payment found for refund.', 'mollie-terminal-for-woocommerce' ) ); }
+		return ( new RefundHandler( new MollieApiClient( ( new Settings() )->api_key() ) ) )->process_refund( $order, $amount, $reason, $legacy );
+	}
+
+	/**
+	 * Whether Pro's ledger holds a counting (authorized or captured) server or device row for
+	 * this gateway: a leg Pro drove and can refund. Free also mints a `webview` row for a sale
+	 * the old panel completed; Pro cannot refund that one, so it stays on the old path.
+	 */
+	private function has_counting_row( $order ): bool {
+		if ( ! class_exists( '\WCPOS\WooCommercePOS\Payments\Contract\Ledger' ) ) { return false; }
+		foreach ( \WCPOS\WooCommercePOS\Payments\Contract\Ledger::instance()->read( $order ) as $row ) {
+			if ( Settings::GATEWAY_ID === ( $row['method_id'] ?? null ) && in_array( $row['status'] ?? '', \WCPOS\WooCommercePOS\Payments\Contract\Ledger::COUNTING_STATUSES, true ) && in_array( $row['capture_mode'] ?? '', array( 'server', 'device' ), true ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The Mollie payment the old panel completed this order with, which only the old refund path
+	 * can return: the paid attempt in the order's history, or the transaction id, unless Free
+	 * copied that from a Pro ledger leg (on a mixed order that is the keypad payment, Pro's).
+	 */
+	private function legacy_payment_id( $order ): string {
+		foreach ( array_reverse( PaymentAttempt::history( $order ) ) as $attempt ) {
+			$id = (string) ( $attempt['payment_id'] ?? '' );
+			if ( 'paid' === ( $attempt['status'] ?? '' ) && '' !== $id && ! $this->is_pro_leg_reference( $order, $id ) ) { return $id; }
+		}
+		$transaction = (string) $order->get_transaction_id();
+		return '' !== $transaction && ! $this->is_pro_leg_reference( $order, $transaction ) ? $transaction : '';
+	}
+
+	/** Whether a Mollie payment id names a server or device leg in Pro's ledger. */
+	private function is_pro_leg_reference( $order, string $reference ): bool {
+		if ( '' === $reference || ! class_exists( '\WCPOS\WooCommercePOS\Payments\Contract\Ledger' ) ) { return false; }
+		foreach ( \WCPOS\WooCommercePOS\Payments\Contract\Ledger::instance()->read( $order ) as $row ) {
+			if ( ! in_array( $row['capture_mode'] ?? '', array( 'server', 'device' ), true ) ) { continue; }
+			$refs = $row['provider_refs'] ?? array();
+			if ( in_array( $reference, array( $refs['action'] ?? null, $refs['mollie_payment'] ?? null, $refs['transaction_id'] ?? null ), true ) ) { return true; }
+		}
+		return false;
+	}
 }

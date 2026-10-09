@@ -16,7 +16,7 @@ $payment = array( 'id' => 'tr_x', 'status' => 'failed', 'mode' => 'live', 'amoun
 $result = Provider::normalize( $payment );
 expect( 'declined' === $result['failure_reason'], 'statusReason wins' );
 expect( '12.340' === $result['amount'] && 'EUR' === $result['currency'], 'money strings pass through exactly' );
-expect( array( 'mollie_payment' => 'tr_x', 'mollie_mode' => 'live', 'reader' => 'term_A' ) === $result['provider_refs'], 'refs must contain only owned keys' );
+expect( array( 'mollie_payment' => 'tr_x', 'transaction_id' => 'tr_x', 'mollie_mode' => 'live', 'reader' => 'term_A' ) === $result['provider_refs'], 'refs carry the Mollie payment id as the transaction id Free copies onto the order' );
 expect( array( 'card_label' => 'Visa', 'card_last4' => '1234', 'auth_code' => 'abc', 'read_method' => 'contactless', 'verification' => 'pin', 'mollie_payment' => 'tr_x' ) === $result['receipt'], 'receipt keeps non-empty strings only' );
 unset( $payment['statusReason'] );
 expect( 'fallback' === Provider::normalize( $payment )['failure_reason'], 'details failure fallback' );

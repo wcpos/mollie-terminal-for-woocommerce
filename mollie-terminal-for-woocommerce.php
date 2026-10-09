@@ -83,6 +83,8 @@ function init(): void {
 	add_action( 'woocommerce_create_refund', array( RefundHandler::class, 'remember_refund' ), 10, 2 );
 	// The keypad's server mode, on Pro's shared base.
 	Server\Registration::register();
+	// Fold attempts the old order-pay panel left mid-flight into Pro's ledger, once per version.
+	add_action( 'init', array( Legacy_Adoption::class, 'upgrade' ), 20 );
 	new AjaxHandler();
 	new WebhookHandler();
 	new PaymentCleanup();

@@ -138,6 +138,11 @@ class AjaxHandler {
 				Logger::log( 'Mollie Terminal AJAX request used invalid order.', array( 'operation' => $operation, 'order_id' => $order_id ), 'error' );
 				wp_send_json_error( __( 'Invalid order.', 'mollie-terminal-for-woocommerce' ), 404 );
 			}
+			// A tab still showing the old panel after the upgrade: the attempt is Pro's leg now, and
+			// the old panel must neither poll, cancel nor replace it.
+			if ( Legacy_Adoption::is_adopted_order( $order ) ) {
+				wp_send_json_error( __( 'This payment is now handled by WooCommerce POS. Reload the page.', 'mollie-terminal-for-woocommerce' ), 409 );
+			}
 			$result = $callback( $order );
 			if ( is_array( $result ) ) {
 				// The order is already reconciled and paid, so re-submitting the

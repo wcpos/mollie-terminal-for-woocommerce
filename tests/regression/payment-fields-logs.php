@@ -17,7 +17,8 @@ function is_checkout_pay_page() { return true; }
 function wp_hash( $data ) { return hash( 'sha256', $data ); }
 function wp_salt( $scheme = '' ) { return 'test-salt'; }
 
-$GLOBALS['mtfwc_test_options'] = array( 'default_terminal_id' => 'term_default_for_test', 'show_logs' => 'no' );
+// The old panel renders under the QR carve-out only; order-pay-panel-is-pro.php covers Pro's panel.
+$GLOBALS['mtfwc_test_options'] = array( 'default_terminal_id' => 'term_default_for_test', 'show_logs' => 'no', 'qr_methods' => array( 'ideal' ) );
 function get_option( $key, $default = array() ) { return $GLOBALS['mtfwc_test_options']; }
 function admin_url( $path = '' ) { return 'https://example.test/wp-admin/' . ltrim( $path, '/' ); }
 function add_query_arg( array $args, $url ) { return $url . '?' . http_build_query( $args ); }
