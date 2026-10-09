@@ -4,6 +4,7 @@ require_once __DIR__ . '/stubs/wcpos-pro-server.php';
 require_once __DIR__ . '/../../includes/Settings.php';
 require_once __DIR__ . '/../../includes/Utils/Money.php';
 require_once __DIR__ . '/../../includes/Services/MollieApiClient.php';
+require_once __DIR__ . '/../../includes/Services/MollieUnansweredException.php';
 require_once __DIR__ . '/../../includes/Services/TerminalService.php';
 expect( file_exists( __DIR__ . '/../../includes/Server/Mollie_Server_Provider.php' ), 'server adapter is missing' );
 require_once __DIR__ . '/../../includes/Server/Mollie_Server_Provider.php';
@@ -45,7 +46,10 @@ expect( is_wp_error( $result ) && 400 === $result->get_error_data()['status'] &&
 $row['currency'] = 'EUR';
 $client->error = new InvalidArgumentException( 'bad request' );
 $result = $provider->create_reader_action( $row, 'term_A' );
-expect( is_wp_error( $result ) && 502 === $result->get_error_data()['status'], 'client exceptions become provider errors' );
+expect( is_wp_error( $result ) && 502 === $result->get_error_data()['status'] && empty( $result->get_error_data()['indeterminate'] ), 'client exceptions become provider errors' );
+$client->error = new WCPOS\WooCommercePOS\MollieTerminal\Services\MollieUnansweredException( 'Response lost' );
+$result = $provider->create_reader_action( $row, 'term_A' );
+expect( is_wp_error( $result ) && true === $result->get_error_data()['indeterminate'] && 'mollie_unanswered' === $result->get_error_code(), 'an unanswered create is indeterminate: Free keeps the row and the replay reuses the Idempotency-Key' );
 unset( $orders[123] );
 expect( 'wcpos_order_not_found' === $provider->create_reader_action( $row, 'term_A' )->get_error_code(), 'missing order' );
 expect( 'mollie' === $provider->provider(), 'provider family' );
@@ -56,9 +60,10 @@ expect( 501 === $provider->capture( 'tr_x' )->get_error_data()['status'], 'manua
 function wp_json_encode( $value ) { return json_encode( $value ); }
 class PayloadLogger { public function log( $level, $message, $context = array() ) {} }
 function wc_get_logger() { return new PayloadLogger(); }
-function wp_remote_request( $url, $args ) { $GLOBALS['http'][] = array( $url, $args ); return array(); }
-function wp_remote_retrieve_response_code( $response ) { return 201; }
-function wp_remote_retrieve_body( $response ) { return '{"id":"tr_x"}'; }
+function wp_remote_request( $url, $args ) { $GLOBALS['http'][] = array( $url, $args ); return $GLOBALS['http_answer'] ?? array(); }
+function wp_remote_retrieve_response_code( $response ) { return $response['code'] ?? 201; }
+function wp_remote_retrieve_body( $response ) { return $response['body'] ?? '{"id":"tr_x"}'; }
+function is_wp_error_answer( $answer ) { return $answer instanceof WP_Error; }
 require_once __DIR__ . '/../../includes/Logger.php';
 $real = new MollieApiClient( 'test_fixture' );
 $real->create_payment( $payload, array(), $row['id'] );
@@ -66,4 +71,11 @@ $real->create_payment( $payload );
 expect( $row['id'] === $http[0][1]['headers']['Idempotency-Key'], 'HTTP idempotency header' );
 expect( ! isset( $http[1][1]['headers']['Idempotency-Key'] ), 'legacy requests omit idempotency header' );
 expect( 'Bearer test_fixture' === $http[0][1]['headers']['Authorization'], 'auth header preserved' );
+// A transport loss, a 5xx, a 429 or a 423 did not decide anything; any other 4xx is Mollie's answer.
+foreach ( array( array( new WP_Error( 'http_request_failed', 'timeout' ), true ), array( array( 'code' => 503, 'body' => '{"detail":"down"}' ), true ), array( array( 'code' => 429, 'body' => '{"detail":"slow down"}' ), true ), array( array( 'code' => 423, 'body' => '{"detail":"locked"}' ), true ), array( array( 'code' => 422, 'body' => '{"detail":"invalid"}' ), false ), array( array( 'code' => 404, 'body' => '{"detail":"gone"}' ), false ) ) as $case ) {
+	list( $GLOBALS['http_answer'], $unanswered ) = $case;
+	try { $real->create_payment( $payload, array(), $row['id'] ); expect( false, 'an error answer must throw' ); } catch ( Exception $e ) {
+		expect( $unanswered === ( $e instanceof WCPOS\WooCommercePOS\MollieTerminal\Services\MollieUnansweredException ), 'unanswered vs refused: ' . json_encode( $GLOBALS['http_answer'] instanceof WP_Error ? 'transport' : $GLOBALS['http_answer']['code'] ) );
+	}
+}
 echo "server-create-action-payload ok\n";

@@ -11,6 +11,7 @@ require_once __DIR__ . '/../../includes/Utils/Money.php';
 require_once __DIR__ . '/../../includes/PaymentLock.php';
 require_once __DIR__ . '/../../includes/PaymentAttempt.php';
 require_once __DIR__ . '/../../includes/Services/MollieApiClient.php';
+require_once __DIR__ . '/../../includes/Services/MollieUnansweredException.php';
 require_once __DIR__ . '/../../includes/Services/TerminalService.php';
 require_once __DIR__ . '/../../includes/RefundReconciler.php';
 expect( file_exists( __DIR__ . '/../../includes/Server/Mollie_Server_Provider.php' ), 'server adapter is missing' );
@@ -27,6 +28,7 @@ class RefundOrder {
 class WC_Order_Refund {
 	public $meta = array();
 	public function get_id() { return 456; }
+	public function get_parent_id() { return 123; }
 	public function get_reason() { return 'Returned item'; }
 	public function get_meta( $key ) { return $this->meta[ $key ] ?? ''; }
 	public function update_meta_data( $key, $value ) { $this->meta[ $key ] = $value; }
@@ -70,6 +72,15 @@ foreach ( array( 'refunded' => 'succeeded', 'queued' => 'pending', 'pending' => 
 	$client->refreshed = 'failed';
 	expect( array( 'status' => 'failed', 'provider_ref' => 're_x' ) === $provider->refund( $row, 456, '5.00' ), 'replay refreshes a failed refund' );
 }
+// A historical webview row names no order and carries the Mollie payment id as its transaction reference.
+$orders[456] = new WC_Order_Refund();
+$client->status = 'refunded';
+$client->calls = array();
+expect( array( 'status' => 'succeeded', 'provider_ref' => 're_x' ) === $provider->refund( array( 'provider_refs' => array( 'transaction_id' => 'tr_hist' ) ), 456, '5.00' ) && array( 'tr_hist', 'tr_hist', 'tr_hist' ) === $client->calls, 'a historical row refunds its transaction reference, with the order from the refund record' );
+$orders[456] = new WC_Order_Refund();
+$client->status = new WCPOS\WooCommercePOS\MollieTerminal\Services\MollieUnansweredException( 'Response lost' );
+$result = $provider->refund( $row, 456, '5.00' );
+expect( is_wp_error( $result ) && true === $result->get_error_data()['indeterminate'], 'an unanswered refund is indeterminate, never failed' );
 $orders[456] = new WC_Order_Refund();
 $orders[456]->meta[ RefundReconciler::META_ATTEMPT_ID ] = 'attempt';
 $client->refunds = array( array( 'id' => 're_found', 'status' => 'refunded', 'metadata' => array( 'order_id' => '123', 'woo_refund_id' => '456', 'refund_attempt_id' => 'attempt' ) ) );

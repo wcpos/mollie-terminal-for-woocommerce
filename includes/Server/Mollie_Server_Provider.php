@@ -6,6 +6,7 @@ use RuntimeException;
 use WCPOS\WooCommercePOS\MollieTerminal\RefundReconciler;
 use WCPOS\WooCommercePOS\MollieTerminal\Settings;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieApiClient;
+use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieUnansweredException;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\TerminalService;
 use WCPOS\WooCommercePOS\MollieTerminal\Utils\Money;
 
@@ -67,6 +68,10 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 			);
 			$payment = $this->client->create_payment( $payload, array(), $row['id'] );
 			return array( 'ref' => $payment['id'], 'expires_at' => $payment['expiresAt'] ?? null );
+		} catch ( MollieUnansweredException $e ) {
+			// The payment may exist: Free keeps the row pending, and the replay carries the same
+			// Idempotency-Key (the row id), so Mollie hands back the payment the lost response made.
+			return $this->indeterminate( 'mollie_unanswered', $e->getMessage() );
 		} catch ( RuntimeException | InvalidArgumentException $e ) {
 			return self::provider_error( $e->getMessage() );
 		}
@@ -75,6 +80,8 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 	public function fetch( string $ref ) {
 		try {
 			return self::normalize( $this->client->get_payment( $ref ) );
+		} catch ( MollieUnansweredException $e ) {
+			return $this->indeterminate( 'mollie_unanswered', $e->getMessage() ); // Nothing observed; the next poll asks again.
 		} catch ( RuntimeException | InvalidArgumentException $e ) {
 			return self::provider_error( $e->getMessage() );
 		}
@@ -134,8 +141,10 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 
 	public function refund( array $row, int $refund_id, string $amount ) {
 		try {
-			$order = wc_get_order( (int) $row['order_id'] );
 			$refund = wc_get_order( $refund_id );
+			// A historical webview row (refunded by its transaction reference) names no order; the
+			// refund record does.
+			$order = wc_get_order( (int) ( $row['order_id'] ?? ( $refund ? $refund->get_parent_id() : 0 ) ) );
 			if ( ! $order || ! $refund ) { return new \WP_Error( 'wcpos_refund_not_found', __( 'Order or refund not found.', 'mollie-terminal-for-woocommerce' ), array( 'status' => 404 ) ); }
 			// The leg's own action, or, for a historical webview row, the Mollie payment id Free kept as
 			// the transaction reference.
@@ -144,6 +153,10 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 			$result = ( new RefundReconciler( $this->client ) )->refund( $order, $refund, $amount, (string) $refund->get_reason(), $payment_id );
 			$statuses = array( 'refunded' => 'succeeded', 'queued' => 'pending', 'pending' => 'pending', 'processing' => 'pending', 'failed' => 'failed', 'canceled' => 'failed' );
 			return array( 'status' => $statuses[ $result['mollie_status'] ] ?? 'pending', 'provider_ref' => $result['refund_id'] ?: null );
+		} catch ( MollieUnansweredException $e ) {
+			// The refund may have been created: not a failure. A retry finds it by its metadata
+			// (order, refund record and attempt id) instead of creating another.
+			return $this->indeterminate( 'mollie_unanswered', $e->getMessage() );
 		} catch ( RuntimeException | InvalidArgumentException $e ) {
 			return self::provider_error( $e->getMessage() );
 		}

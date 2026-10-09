@@ -4,6 +4,8 @@ namespace WCPOS\WooCommercePOS\MollieTerminal\Services;
 use RuntimeException;
 use WCPOS\WooCommercePOS\MollieTerminal\Logger;
 
+require_once __DIR__ . '/MollieUnansweredException.php'; // The client's own exception, loaded with it.
+
 class MollieApiClient {
 	private const BASE_URL = 'https://api.mollie.com/v2';
 	private $api_key;
@@ -46,7 +48,8 @@ class MollieApiClient {
 		$response = wp_remote_request( self::BASE_URL . $path, $args );
 		if ( is_wp_error( $response ) ) {
 			Logger::log_api_error( 'Mollie API transport error: ' . $response->get_error_message(), array( 'method' => $method, 'path' => $path ) );
-			throw new RuntimeException( 'Mollie API request failed.' );
+			// The request may have reached Mollie: an unanswered request is not a refusal.
+			throw new MollieUnansweredException( 'Mollie API request failed.' );
 		}
 		$code = (int) wp_remote_retrieve_response_code( $response );
 		$raw = (string) wp_remote_retrieve_body( $response );
@@ -55,6 +58,10 @@ class MollieApiClient {
 		if ( $code < 200 || $code >= 300 ) {
 			$message = $data['detail'] ?? $data['title'] ?? 'Mollie API error.';
 			Logger::log_api_error( sprintf( 'Mollie API error (%s %s, HTTP %d): %s', $method, $path, $code, $message ), array( 'method' => $method, 'path' => $path, 'status' => $code, 'body' => $data ) );
+			// A 5xx, a rate limit or a lock did not decide anything; any other 4xx is Mollie's answer.
+			if ( $code >= 500 || 429 === $code || 423 === $code ) {
+				throw new MollieUnansweredException( $message );
+			}
 			throw new RuntimeException( $message );
 		}
 		Logger::log( sprintf( 'Mollie API request succeeded (%s %s).', $method, $path ), array( 'method' => $method, 'path' => $path, 'status' => $code ), 'debug' );
