@@ -1,7 +1,9 @@
 <?php
 // An attempt Pro adopted on upgrade is Pro's leg: the stale-payment sweep neither cancels nor
-// completes it, the order-status cleanup leaves it, a tab still on the old panel is refused, and
-// the legacy webhook acknowledges its delivery without calling Mollie.
+// completes it (the abandoned list included), the completion claim completes nothing for it, a tab
+// still on the old panel is refused (and under Pro's panel no old start is accepted at all), and the
+// legacy webhook acknowledges its delivery without calling Mollie. The order-status cleanup still
+// cancels it when the order leaves the payable state: Pro voids its leg only on cancelled or failed.
 function expect( $condition, $message = 'expectation failed' ) { if ( ! $condition ) { fwrite( STDERR, $message . "\n" ); exit( 1 ); } }
 require_once __DIR__ . '/support/fake-wpdb.php';
 
@@ -20,6 +22,8 @@ function wp_hash( $data ) { return hash( 'sha256', $data ); }
 function wp_salt( $scheme = '' ) { return 'salt'; }
 function get_option( $key, $default = false ) { return $GLOBALS['options'][ $key ] ?? $default; }
 function clean_post_cache( $id ) {}
+function admin_url( $path = '' ) { return 'https://shop.example/wp-admin/' . $path; }
+function add_query_arg( $args, $url = '' ) { return $url . '?' . http_build_query( $args ); }
 function wc_get_order( $id ) { return $GLOBALS['order']; }
 function wcpos_pro_payment_id_for_action( $provider, $ref ) { return $GLOBALS['adopted_map'][ $ref ] ?? null; }
 function wcpos_get_settings( $id, $key = null ) { return array( 'gateways' => array( 'mollie_terminal_for_woocommerce' => array( 'enabled' => true ) ) ); }
@@ -57,8 +61,16 @@ $wpdb = new FakeWpdb();
 $GLOBALS['options'] = array( 'woocommerce_mollie_terminal_for_woocommerce_settings' => array( 'api_key' => 'live_k' ) );
 
 class FakeOrderForGuards {
-	public $meta = array(); public $paid = false; public $notes = array(); public $status = 'processing';
+	public $meta = array(); public $paid = false; public $notes = array(); public $status = 'processing'; public $completed = 0;
 	public function get_id() { return 777; }
+	public function get_total() { return '10.00'; }
+	public function get_currency() { return 'EUR'; }
+	public function get_order_number() { return '777'; }
+	public function get_checkout_order_received_url() { return 'https://shop.example/received/777'; }
+	public function get_transaction_id() { return ''; }
+	public function set_transaction_id( $id ) {}
+	public function payment_complete( $id = '' ) { $this->completed++; $this->paid = true; return true; }
+	public function delete_meta_data( $key ) { unset( $this->meta[ $key ] ); }
 	public function is_paid() { return $this->paid; }
 	public function get_status() { return $this->status; }
 	public function get_meta( $key ) { return $this->meta[ $key ] ?? null; }
@@ -95,17 +107,43 @@ $sweeper = new PaymentSweeper( $service );
 expect( false === $sweeper->sweep_order( open_attempt( 'tr_adopted', 3600 ) ) && 0 === $service->cancels, 'the sweep leaves an adopted attempt alone' );
 expect( true === $sweeper->sweep_order( open_attempt( 'tr_old', 3600 ) ) && 1 === $service->cancels, 'an unadopted stale attempt is still swept' );
 
-// The order-status cleanup: an adopted attempt is Pro's to cancel.
+// The order-status cleanup cancels an adopted attempt too when the order is paid another way: a
+// terminal payment left open is a second charge waiting for a tap, and Pro voids only on
+// cancelled or failed.
 $service = new CountingServiceForGuards();
 $cleanup = new PaymentCleanup( $service );
-$cleanup->maybe_cancel_abandoned_payment( 777, 'pending', 'cancelled', open_attempt( 'tr_adopted', 10 ) );
-expect( 0 === $service->cancels, 'the cleanup leaves an adopted attempt alone' );
+$cleanup->maybe_cancel_abandoned_payment( 777, 'pending', 'processing', open_attempt( 'tr_adopted', 10 ) );
+expect( 1 === $service->cancels, 'the cleanup cancels an adopted attempt when the order is paid another way' );
+$GLOBALS['order'] = open_attempt( 'tr_adopted', 10 ); $GLOBALS['order']->status = 'processing';
 $cleanup->retry_cancel( 777, 'tr_adopted', 1 );
-$GLOBALS['order'] = open_attempt( 'tr_adopted', 10 ); $GLOBALS['order']->status = 'cancelled';
-$cleanup->retry_cancel( 777, 'tr_adopted', 1 );
-expect( 0 === $service->cancels, 'the cleanup retry leaves an adopted attempt alone' );
-$cleanup->maybe_cancel_abandoned_payment( 777, 'pending', 'cancelled', open_attempt( 'tr_old', 10 ) );
-expect( 1 === $service->cancels, 'an unadopted attempt is still cancelled when the order leaves' );
+expect( 2 === $service->cancels, 'the cleanup retry cancels it too' );
+
+// The abandoned list: an interrupted set-aside can leave the adopted payment there; it leaves the
+// list without a call to Mollie while the other entries are resolved as before.
+$abandoned = new FakeOrderForGuards();
+$abandoned->meta[ PaymentAttempt::META_ABANDONED_PAYMENT_IDS ] = array( 'tr_adopted', 'tr_other' );
+$GLOBALS['order'] = $abandoned; $GLOBALS['http'] = array();
+$results = ( new MolliePaymentService( new \WCPOS\WooCommercePOS\MollieTerminal\Services\MollieApiClient( 'live_k' ), new \WCPOS\WooCommercePOS\MollieTerminal\Settings() ) )->cancel_abandoned_payments( $abandoned );
+expect( 'adopted' === $results['tr_adopted'] && 'error' === $results['tr_other'], 'the adopted entry is left to Pro, the other is resolved (here: Mollie offline)' );
+expect( array( 'https://api.mollie.com/v2/payments/tr_other' ) === $GLOBALS['http'], 'Mollie is asked about the other entry only' );
+expect( array( 'tr_other' ) === PaymentAttempt::abandoned( $abandoned ), 'the adopted entry is forgotten from the abandoned list' );
+
+// The completion claim: a paid payment adopted while this request was asking Mollie is left to Pro.
+$racing = open_attempt( 'tr_adopted', 10 );
+$racing->completed = 0;
+$GLOBALS['order'] = $racing;
+$result = ( new \WCPOS\WooCommercePOS\MollieTerminal\PaymentReconciler( new \WCPOS\WooCommercePOS\MollieTerminal\Settings() ) )->reconcile( $racing, array( 'id' => 'tr_adopted', 'status' => 'paid', 'amount' => array( 'value' => '10.00', 'currency' => 'EUR' ) ), 'webhook' );
+expect( array( 'status' => 'pending', 'completing' => true, 'retry_allowed' => false ) === $result && 0 === $racing->completed, 'the reconciler completes nothing for an adopted payment under its claim' );
+
+// Under Pro's panel no old-panel start is accepted, adopted attempt or none; poll and cancel of an
+// attempt Pro did not adopt go on.
+$GLOBALS['order'] = new FakeOrderForGuards();
+$_POST = array( 'order_id' => '777', 'order_token' => AjaxHandler::order_token( 777 ), 'terminal_id' => 'term_1' );
+try { ( new AjaxHandler() )->mtfwc_start_payment(); expect( false, 'start should answer' ); } catch ( JsonResponseForGuards $r ) { expect( 409 === $r->status, 'under Pro\'s panel an old-panel start is refused even with nothing adopted' ); }
+$GLOBALS['options']['woocommerce_mollie_terminal_for_woocommerce_settings']['qr_methods'] = array( 'ideal' );
+$_POST = array( 'order_id' => '777', 'order_token' => AjaxHandler::order_token( 777 ), 'channel' => 'qr', 'qr_method' => 'ideal' );
+try { ( new AjaxHandler() )->mtfwc_start_payment(); expect( false, 'start should answer' ); } catch ( JsonResponseForGuards $r ) { expect( 409 !== $r->status, 'under the QR carve-out the old panel starts as before (here it reaches Mollie)' ); }
+$GLOBALS['options']['woocommerce_mollie_terminal_for_woocommerce_settings']['qr_methods'] = array();
 
 // A tab still on the old panel: poll, cancel and start are refused with a reload message.
 foreach ( array( 'mtfwc_poll_payment', 'mtfwc_cancel_payment', 'mtfwc_start_payment' ) as $action ) {

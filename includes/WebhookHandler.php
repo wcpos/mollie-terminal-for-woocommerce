@@ -39,6 +39,12 @@ class WebhookHandler {
 				Logger::log( 'Mollie webhook received for unknown payment.', array( 'payment_id' => $payment_id ), 'warning' );
 				return;
 			}
+			// Asked again after the call to Mollie: adoption may have run meanwhile. The reconciler
+			// repeats the check under its completion claim, which adoption shares.
+			if ( Legacy_Adoption::is_adopted( $payment_id ) ) {
+				Logger::log( 'Mollie webhook for an attempt WooCommerce POS adopted meanwhile; left to the POS.', array( 'payment_id' => $payment_id ), 'info' );
+				return;
+			}
 			( new PaymentReconciler( $settings ) )->reconcile( $order, $payment, 'webhook' );
 			Logger::log( 'Mollie webhook reconciled.', array( 'payment_id' => $payment_id, 'order_id' => (int) $order->get_id(), 'status' => $payment['status'] ?? '' ), 'success' );
 		} catch ( Exception $e ) {

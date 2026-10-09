@@ -211,6 +211,14 @@ async function flush() {
 		return flush();
 	}
 
+	// Answers the newest request: earlier scenarios may leave fetches of their own pending.
+	function resolveRefused(status, data) {
+		const resolve = pendingFetches.pop();
+		assert(resolve, 'expected a pending fetch request');
+		resolve({ ok: false, status, text: () => Promise.resolve(JSON.stringify({ success: false, data })) });
+		return flush();
+	}
+
 	async function fireTimers() {
 		const due = Object.keys(timers);
 		due.forEach((id) => { const fn = timers[id]; delete timers[id]; fn(); });
@@ -704,6 +712,33 @@ async function flush() {
 	qrResumeAction.click(); // cancel, keeping later beacon expectations intact
 	await resolveNext({ status: 'canceled' });
 	assert.strictEqual(qrResumePanel.querySelector('.mtfwc-qr-code').hidden, true, 'canceling a resumed QR attempt should hide the QR block');
+
+	// roadmap#95: the attempt is WooCommerce POS's now (adopted on upgrade, or the page runs
+	// Pro's panel). A 409 stops the loop and tells the cashier to reload; nothing is retried.
+	const adoptedPanel = makePanel('909', { 'data-resume': '1' });
+	panels.push(adoptedPanel);
+	jqueryHandlers.updated_checkout();
+	await resolveNext({ terminals: [{ id: 'term_default', label: 'Back office', status: 'active' }], default_terminal_id: 'term_default' });
+	assert(adoptedPanel.mtfwcPoll, 'the resumed panel polls');
+	await fireTimers();
+	assert.strictEqual(lastAction(), 'mtfwc_poll_payment', 'the resumed poll asks the server');
+	await resolveRefused(409, 'This payment is now handled by WooCommerce POS. Reload the page.');
+	const pendingBefore = pendingFetches.length;
+	assert.strictEqual(adoptedPanel.mtfwcPoll, null, 'a 409 stops the poll loop');
+	assert(/Reload the page/.test(adoptedPanel.querySelector('.mtfwc-payment-status').textContent), 'the cashier is told to reload');
+	assert.strictEqual(adoptedPanel.querySelector('.mtfwc-primary-action').disabled, true, 'the panel offers no further action');
+	await fireTimers();
+	assert.strictEqual(pendingFetches.length, pendingBefore, 'nothing is retried after a 409');
+	// A start refused the same way (the page runs Pro's panel in another tab) ends the same.
+	const stalePanel = makePanel('910');
+	panels.push(stalePanel);
+	jqueryHandlers.updated_checkout();
+	await resolveNext({ terminals: [{ id: 'term_default', label: 'Back office', status: 'active' }], default_terminal_id: 'term_default' });
+	stalePanel.querySelector('.mtfwc-primary-action').click();
+	await resolveRefused(409, 'This payment is now handled by WooCommerce POS. Reload the page.');
+	assert(!stalePanel.mtfwcPoll, 'a refused start arms no poll loop');
+	assert(/Reload the page/.test(stalePanel.querySelector('.mtfwc-payment-status').textContent), 'a refused start tells the cashier to reload');
+	assert.strictEqual(stalePanel.querySelector('.mtfwc-primary-action').disabled, true, 'a refused start leaves no action');
 
 	// Closing the page while a payment is in flight fires one best-effort cancel
 	// beacon (the locked panel is still polling).

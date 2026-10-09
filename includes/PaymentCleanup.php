@@ -62,10 +62,9 @@ class PaymentCleanup {
 		if ( ! $current || empty( $current['payment_id'] ) || ! PaymentAttempt::is_non_final( (string) ( $current['status'] ?? '' ) ) ) {
 			return;
 		}
-		// An attempt Pro adopted on upgrade is Pro's leg; Pro cancels it when the order leaves.
-		if ( Legacy_Adoption::is_adopted( (string) $current['payment_id'] ) ) {
-			return;
-		}
+		// An attempt Pro adopted on upgrade is cancelled here too: Pro voids its leg only when the
+		// order is cancelled or failed, and an order paid another way must not leave a terminal
+		// payment open for the customer to tap. Pro's leg then observes the cancellation.
 		Logger::log( 'Order left the payable state with an open Mollie terminal payment; canceling it.', array( 'order_id' => (int) $order_id, 'to_status' => (string) $to_status, 'payment_id' => $current['payment_id'] ), 'info' );
 		$this->cancel_open_payment( $order, (string) $current['payment_id'], (string) $to_status, 0 );
 	}
@@ -84,7 +83,7 @@ class PaymentCleanup {
 		$order = function_exists( 'wc_get_order' ) ? wc_get_order( (int) $order_id ) : false;
 		if ( ! $order || ! in_array( (string) $order->get_status(), self::NON_PAYABLE, true ) ) { return; }
 		$current = PaymentAttempt::current( $order );
-		if ( ! $current || (string) ( $current['payment_id'] ?? '' ) !== (string) $payment_id || ! PaymentAttempt::is_non_final( (string) ( $current['status'] ?? '' ) ) || Legacy_Adoption::is_adopted( (string) $payment_id ) ) {
+		if ( ! $current || (string) ( $current['payment_id'] ?? '' ) !== (string) $payment_id || ! PaymentAttempt::is_non_final( (string) ( $current['status'] ?? '' ) ) ) {
 			return;
 		}
 		$this->cancel_open_payment( $order, (string) $payment_id, (string) $order->get_status(), (int) $attempt );

@@ -12,7 +12,7 @@ namespace WCPOS\WooCommercePOS\MollieTerminal;
  * its own and `Mollie_Server_Provider::fetch()` reads it directly.
  */
 final class Legacy_Adoption {
-	/** Plugin version this adoption belongs to. */
+	/** The version that introduced adoption; its pass runs once, and this marks it done. */
 	public const VERSION = '1.0.0';
 	/** Candidates per `init` request; keeps the request that triggers it short. */
 	public const PAGE_SIZE = 25;
@@ -59,19 +59,26 @@ final class Legacy_Adoption {
 		return self::is_adopted( (string) ( $current['payment_id'] ?? '' ) ) || self::is_adopted( (string) $order->get_meta( self::META_ADOPTED ) );
 	}
 
-	/** Run the next page of adoption, until every candidate snapshotted at the start has been seen. */
+	/**
+	 * Run the next page of adoption, until every candidate snapshotted at the start has been seen.
+	 *
+	 * Only while the order-pay page runs through Pro's panel: under the QR carve-out the old panel
+	 * stays whole and owns its attempts, so nothing is adopted and the pass is not marked done;
+	 * it runs when the merchant disables the QR methods.
+	 */
 	public static function upgrade(): void {
-		if ( version_compare( (string) get_option( self::VERSION_OPTION, '0' ), self::VERSION, '>=' ) ) {
+		if ( version_compare( (string) get_option( self::VERSION_OPTION, '0' ), self::VERSION, '>=' ) || ! ( new Settings() )->uses_pro_panel() ) {
 			return;
 		}
-		// The candidates are snapshotted once, as order id => Mollie payment id, when the pass
-		// begins: every open terminal attempt on an order still waiting for payment. Paging a
-		// live filter by offset would skip rows as webhooks move orders out of it, and an attempt
-		// the old panel starts later is never a candidate.
+		// The candidates are snapshotted once, as order ids, when the pass begins: every order
+		// still waiting for payment that carries an attempt pointer. Ids only, so the one request
+		// that takes the snapshot loads no order objects; each order is read, and judged, on its
+		// own page below. Paging a live filter by offset would skip rows as webhooks move orders
+		// out of it, and an attempt the old panel starts later is never a candidate (under Pro's
+		// panel the old panel can start none).
 		$queue = get_option( self::QUEUE_OPTION, null );
 		if ( ! is_array( $queue ) ) {
-			$queue      = array();
-			$candidates = wc_get_orders(
+			$ids = wc_get_orders(
 				array(
 					'type'         => 'shop_order',
 					// Only orders still waiting for payment: a completed sale keeps its attempt
@@ -80,39 +87,19 @@ final class Legacy_Adoption {
 					'limit'        => -1,
 					'orderby'      => 'ID',
 					'order'        => 'ASC',
+					'return'       => 'ids',
 					// The shortcut both order stores honour; `meta_query` is dropped by the posts store.
 					'meta_key'     => PaymentAttempt::META_CURRENT_PAYMENT_ID, // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key -- One-off upgrade pass.
 					'meta_compare' => 'EXISTS',
 				)
 			);
-			foreach ( $candidates as $order ) {
-				$ref = self::action_ref( $order );
-				if ( '' !== $ref && ! $order->is_paid() && $order->needs_payment() ) {
-					$queue[ $order->get_id() ] = $ref;
-				}
-			}
+			$queue = array_fill_keys( array_map( 'intval', is_array( $ids ) ? $ids : array() ), 1 );
 			update_option( self::QUEUE_OPTION, $queue, false );
 		}
 		$page = array_slice( $queue, 0, self::PAGE_SIZE, true );
-		foreach ( $page as $order_id => $ref ) {
-			$result = self::with_order_lock(
-				(int) $order_id,
-				static function () use ( $order_id, $ref ) {
-					// Read the order under the lock and repeat the checks on that copy, so a leg a
-					// till recorded meanwhile, or a new attempt, is kept out of the way.
-					$fresh = wc_get_order( (int) $order_id );
-					if ( ! $fresh || self::is_adopted( $ref ) || self::action_ref( $fresh ) !== $ref || $fresh->is_paid() || ! $fresh->needs_payment() ) {
-						return null;
-					}
-					$row = wcpos_pro_adopt_legacy_attempt( $fresh, Settings::GATEWAY_ID, $ref, (string) $fresh->get_total(), $fresh->get_currency() );
-					if ( is_array( $row ) ) {
-						$fresh->update_meta_data( self::META_ADOPTED, $ref );
-						$fresh->save();
-					}
-					return $row;
-				}
-			);
-			if ( is_wp_error( $result ) && in_array( $result->get_error_code(), array( 'wcpos_payment_locked', 'mtfwc_adoption_no_lock' ), true ) ) {
+		foreach ( $page as $order_id => $unused ) {
+			$result = self::adopt_order( (int) $order_id );
+			if ( is_wp_error( $result ) && in_array( $result->get_error_code(), array( 'wcpos_payment_locked', 'mtfwc_adoption_no_lock', 'mtfwc_adoption_completing' ), true ) ) {
 				// A held lock is a till at work on that order: it stays in the queue for the next
 				// request. Any other refusal is final for this order and is logged.
 				Logger::log( 'Legacy Mollie adoption deferred for order ' . $order_id . ': ' . $result->get_error_code(), array( 'order_id' => (int) $order_id ), 'info' );
@@ -128,6 +115,52 @@ final class Legacy_Adoption {
 			delete_option( self::QUEUE_OPTION );
 			update_option( self::VERSION_OPTION, self::VERSION, false );
 		}
+	}
+
+	/**
+	 * Adopt the order's open terminal attempt, if it has one Pro does not own yet: under Free's
+	 * per-order lock, on a fresh read, and under the old paths' own completion claim. Run by the
+	 * upgrade pass for each snapshotted order, and by Pro's panel before it renders, so an attempt
+	 * the pass has not reached yet (or one a QR switch-off left behind) is Pro's before the page
+	 * can offer a second charge.
+	 *
+	 * @return array|null|\WP_Error The row, null when nothing applied, or a lock's refusal.
+	 */
+	public static function adopt_order( int $order_id ) {
+		return self::with_order_lock(
+			$order_id,
+			static function () use ( $order_id ) {
+				// Read the order under the lock and judge that copy: an open terminal attempt on an
+				// order still waiting for payment, not adopted yet. A QR attempt, a final one, a paid
+				// order or a leg a till recorded meanwhile is left alone.
+				$fresh = wc_get_order( $order_id );
+				if ( ! $fresh ) {
+					return null;
+				}
+				$ref = self::action_ref( $fresh );
+				if ( '' === $ref || self::is_adopted( $ref ) || $fresh->is_paid() || ! $fresh->needs_payment() ) {
+					return null;
+				}
+				// The old paths complete a paid payment under their own per-order claim; while one
+				// holds it this attempt is mid-completion, and the caller tries again later.
+				try {
+					return PaymentLock::with_lock(
+						$order_id,
+						'complete_payment',
+						static function () use ( $fresh, $ref ) {
+							$row = wcpos_pro_adopt_legacy_attempt( $fresh, Settings::GATEWAY_ID, $ref, (string) $fresh->get_total(), $fresh->get_currency() );
+							if ( is_array( $row ) ) {
+								$fresh->update_meta_data( self::META_ADOPTED, $ref );
+								$fresh->save();
+							}
+							return $row;
+						}
+					);
+				} catch ( \RuntimeException $e ) {
+					return new \WP_Error( 'mtfwc_adoption_completing', $e->getMessage() );
+				}
+			}
+		);
 	}
 
 	/** Run under Free's per-order lock, the one every ledger write takes. */

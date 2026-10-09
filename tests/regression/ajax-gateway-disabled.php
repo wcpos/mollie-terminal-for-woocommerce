@@ -95,8 +95,10 @@ foreach ( array( 'mtfwc_poll_payment', 'mtfwc_cancel_payment' ) as $action ) {
 	expect( 'idle' === ( $response->data['status'] ?? '' ), "$action should report the order's payment state as usual" );
 }
 
-// A gateway never configured in POS counts as disabled.
-expect( 403 === call_action( 'mtfwc_start_payment', array() )->status, 'an unsaved gateway must be treated as disabled' );
+// A gateway never configured in POS counts as disabled. (With no QR method enabled the page is
+// Pro's panel and an old-panel start is refused before the switch is read: legacy-adopted-guards.php.)
+expect( 403 === call_action( 'mtfwc_start_payment', array( 'qr_methods' => array( 'ideal' ) ) )->status, 'an unsaved gateway must be treated as disabled' );
+expect( 409 === call_action( 'mtfwc_start_payment', array() )->status, 'under Pro\'s panel an old-panel start is refused before the switch is read' );
 
 // The POS switch alone lets payments start and terminals list (the 0.5.1 guard
 // looked only at the WooCommerce checkbox and locked every POS-only shop out).
@@ -117,13 +119,13 @@ $pos_settings = array();
 
 // The old web-checkout switch a site saved before the upgrade counts for nothing:
 // the shop's checkout no longer offers the gateway, and POS alone decides.
-$web_only = call_action( 'mtfwc_start_payment', array( 'enabled' => 'yes' ), array( 'channel' => 'qr', 'qr_method' => 'ideal' ) );
+$web_only = call_action( 'mtfwc_start_payment', array( 'enabled' => 'yes', 'qr_methods' => array( 'ideal' ) ), array( 'channel' => 'qr', 'qr_method' => 'ideal' ) );
 expect( 403 === $web_only->status, 'the saved web-checkout switch must not enable the gateway' );
 
 // With the POS switch on the request proceeds past the guard: the QR method
 // check is the next gate, so a disabled QR method now yields 400, not 403.
 $pos_settings = array( 'gateways' => array( 'mollie_terminal_for_woocommerce' => array( 'enabled' => true ) ) );
-$enabled = call_action( 'mtfwc_start_payment', array(), array( 'channel' => 'qr', 'qr_method' => 'ideal' ) );
+$enabled = call_action( 'mtfwc_start_payment', array( 'qr_methods' => array( 'bancontact' ) ), array( 'channel' => 'qr', 'qr_method' => 'ideal' ) );
 expect( 400 === $enabled->status, 'an enabled gateway must let the request through to the next check' );
 
 echo "ajax-gateway-disabled ok\n";

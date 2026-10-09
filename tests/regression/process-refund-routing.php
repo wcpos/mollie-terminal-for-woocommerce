@@ -76,9 +76,17 @@ expect( array() === $GLOBALS['pro'] && array( 'https://api.mollie.com/v2/payment
 $voided = $pro_row; $voided['status'] = 'voided';
 $result = run( array( $voided ), 'tr_pro', array(), null );
 expect( is_wp_error( $result ) && 'mtfwc_refund_not_found' === $result->get_error_code() && array() === $GLOBALS['http'], 'a Pro leg\'s id never reaches the old path' );
-// 6. The newest paid old-panel attempt wins over an older one.
-run( array(), 'tr_pro', array( array( 'payment_id' => 'tr_first', 'status' => 'paid' ), array( 'payment_id' => 'tr_x', 'status' => 'canceled' ), array( 'payment_id' => 'tr_last', 'status' => 'paid' ) ), null );
-expect( array( 'https://api.mollie.com/v2/payments/tr_last' ) === $GLOBALS['http'], 'the newest paid old-panel attempt is refunded' );
+// 6. The transaction id (the payment that completed the order) wins over the history; the history's
+//    newest paid attempt is the fallback when the transaction id is a Pro leg's.
+run( array(), 'tr_old', array( array( 'payment_id' => 'tr_first', 'status' => 'paid' ), array( 'payment_id' => 'tr_conflict', 'status' => 'paid' ) ), null );
+expect( array( 'https://api.mollie.com/v2/payments/tr_old' ) === $GLOBALS['http'], 'the transaction id is refunded, not a later paid attempt recorded as a conflict' );
+run( array( $voided ), 'tr_pro', array( array( 'payment_id' => 'tr_first', 'status' => 'paid' ), array( 'payment_id' => 'tr_x', 'status' => 'canceled' ), array( 'payment_id' => 'tr_last', 'status' => 'paid' ) ), null );
+expect( array( 'https://api.mollie.com/v2/payments/tr_last' ) === $GLOBALS['http'], 'with the transaction id a Pro leg\'s, the newest paid old-panel attempt is refunded' );
+// 7. A paid attempt in the history that is itself a Pro leg (the keypad payment) never reaches the old path.
+run( array( $voided ), 'tr_pro', array( array( 'payment_id' => 'tr_pro', 'status' => 'paid' ) ), null );
+expect( array() === $GLOBALS['http'] && is_wp_error( $result = null ) === false, 'a Pro leg in the history is not an old-panel payment' );
+$result = run( array( $voided ), 'tr_pro', array( array( 'payment_id' => 'tr_pro', 'status' => 'paid' ) ), null );
+expect( is_wp_error( $result ) && 'mtfwc_refund_not_found' === $result->get_error_code() && array() === $GLOBALS['http'], 'nothing to refund when the only paid attempt is the Pro leg' );
 
 echo "process-refund-routing ok\n";
 }

@@ -230,7 +230,7 @@ class Gateway extends WC_Payment_Gateway {
 	 * ledger row, like a keypad payment.
 	 */
 	private function uses_pro_panel(): bool {
-		return array() === ( new Settings() )->qr_methods();
+		return ( new Settings() )->uses_pro_panel();
 	}
 
 	public function payment_fields(): void {
@@ -244,6 +244,10 @@ class Gateway extends WC_Payment_Gateway {
 		if ( $this->uses_pro_panel() ) {
 			$order = wc_get_order( isset( $wp->query_vars['order-pay'] ) ? absint( $wp->query_vars['order-pay'] ) : 0 );
 			if ( $order instanceof \WC_Order ) {
+				// An open attempt the old panel left on this order (the upgrade pass has not reached
+				// it, or QR was switched off mid-flight) is Pro's before the panel can offer a second
+				// charge; a refusal (a till holds the order) leaves it to the pass.
+				Legacy_Adoption::adopt_order( $order->get_id() );
 				wcpos_pro_order_pay_panel( $this, $order );
 			}
 			return;
@@ -435,6 +439,7 @@ class Gateway extends WC_Payment_Gateway {
 					'timedOut' => __( 'Timed out waiting for the terminal. Check the terminal or try again.', 'mollie-terminal-for-woocommerce' ),
 					'timedOutCanceling' => __( 'Timed out waiting for the terminal — canceling the payment…', 'mollie-terminal-for-woocommerce' ),
 					'notCancelable' => __( 'This payment can no longer be canceled.', 'mollie-terminal-for-woocommerce' ),
+					'handledByPos' => __( 'This payment is now handled by WooCommerce POS. Reload the page.', 'mollie-terminal-for-woocommerce' ),
 					'contacting' => __( 'Contacting Mollie Terminal…', 'mollie-terminal-for-woocommerce' ),
 					'requestFailed' => __( 'Mollie Terminal request failed. Copy logs for support.', 'mollie-terminal-for-woocommerce' ),
 					'noTerminals' => __( 'No terminals found on this Mollie account.', 'mollie-terminal-for-woocommerce' ),
@@ -520,16 +525,20 @@ class Gateway extends WC_Payment_Gateway {
 
 	/**
 	 * The Mollie payment the old panel completed this order with, which only the old refund path
-	 * can return: the paid attempt in the order's history, or the transaction id, unless Free
-	 * copied that from a Pro ledger leg (on a mixed order that is the keypad payment, Pro's).
+	 * can return: the order's transaction id, which the old panel set from the payment that
+	 * completed the order, unless Free copied that from a Pro ledger leg (on a mixed order that is
+	 * the keypad payment, Pro's); then the newest paid attempt in the order's history. A paid
+	 * attempt in the history alone does not prove it completed the order (a second one may have
+	 * been recorded as a conflict), so the transaction id is asked first.
 	 */
 	private function legacy_payment_id( $order ): string {
+		$transaction = (string) $order->get_transaction_id();
+		if ( '' !== $transaction && ! $this->is_pro_leg_reference( $order, $transaction ) ) { return $transaction; }
 		foreach ( array_reverse( PaymentAttempt::history( $order ) ) as $attempt ) {
 			$id = (string) ( $attempt['payment_id'] ?? '' );
 			if ( 'paid' === ( $attempt['status'] ?? '' ) && '' !== $id && ! $this->is_pro_leg_reference( $order, $id ) ) { return $id; }
 		}
-		$transaction = (string) $order->get_transaction_id();
-		return '' !== $transaction && ! $this->is_pro_leg_reference( $order, $transaction ) ? $transaction : '';
+		return '';
 	}
 
 	/** Whether a Mollie payment id names a server or device leg in Pro's ledger. */

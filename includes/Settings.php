@@ -75,6 +75,13 @@ class Settings {
 	/** Whether the checkout log tools (Show logs / Copy / Clear) are shown. */
 	public function show_logs(): bool { return 'yes' === $this->get( 'show_logs', 'no' ); }
 
+	/**
+	 * Whether the POS order-pay page runs through Pro's shared panel. QR carve-out (roadmap#95):
+	 * while on-screen QR methods are enabled the merchant keeps Mollie's own panel, because a QR
+	 * code has no home in Pro's panel yet.
+	 */
+	public function uses_pro_panel(): bool { return array() === $this->qr_methods(); }
+
 	/** Enabled on-screen QR payment methods, in their fixed display order. */
 	public function qr_methods(): array {
 		$value = $this->get( 'qr_methods', array() );

@@ -2,6 +2,7 @@
 namespace WCPOS\WooCommercePOS\MollieTerminal\Services;
 
 use RuntimeException;
+use WCPOS\WooCommercePOS\MollieTerminal\Legacy_Adoption;
 use WCPOS\WooCommercePOS\MollieTerminal\Logger;
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentAttempt;
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentCleanup;
@@ -209,6 +210,14 @@ class MolliePaymentService {
 		return PaymentLock::with_lock( (int) $order->get_id(), 'cancel_abandoned', function () use ( $order, $payment_ids ) {
 			$results = array();
 			foreach ( $payment_ids as $payment_id ) {
+				// An interrupted set-aside can leave one open payment both current and abandoned;
+				// adopted by WooCommerce POS as the current attempt, it is the POS's leg and leaves
+				// this list without a call to Mollie.
+				if ( Legacy_Adoption::is_adopted( $payment_id ) ) {
+					PaymentAttempt::forget_abandoned( $order, $payment_id );
+					$results[ $payment_id ] = 'adopted';
+					continue;
+				}
 				try {
 					$results[ $payment_id ] = $this->resolve_abandoned_payment( $order, $payment_id );
 				} catch ( RuntimeException $e ) {
