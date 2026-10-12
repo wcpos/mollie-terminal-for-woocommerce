@@ -150,6 +150,52 @@ class RefundReconciler {
 	}
 
 	/**
+	 * Read back a refund without ever making one: Pro's refund sweep asks here about an allocation
+	 * Mollie answered as queued or pending. By reference when the record has one; otherwise by the
+	 * metadata the POST carried (the record, its order and its attempt id), which is how a refund
+	 * made by a POST Mollie never answered is found. Nothing is listed yet: null, and the record
+	 * stands as it is (the scheduled ask, not the sweep, is what makes a missing refund).
+	 *
+	 * @param \WC_Order_Refund $woo_refund WooCommerce refund record.
+	 * @param string           $payment_id Mollie payment.
+	 * @param string           $refund_id  Mollie refund the caller knows, or ''.
+	 * @return array|null refund_id and mollie_status, or null when Mollie lists no such refund.
+	 */
+	public function read( $woo_refund, string $payment_id, string $refund_id = '' ): ?array {
+		if ( '' === $payment_id ) { throw new RuntimeException( 'No Mollie payment found for refund.' ); }
+		if ( '' === $refund_id ) { $refund_id = (string) $woo_refund->get_meta( self::META_MOLLIE_REFUND_ID ); }
+		if ( '' !== $refund_id ) {
+			$remote = $this->client->get_refund( $payment_id, $refund_id );
+			$woo_refund->update_meta_data( self::META_MOLLIE_REFUND_ID, $refund_id );
+			$woo_refund->update_meta_data( self::META_STATUS, (string) ( $remote['status'] ?? $woo_refund->get_meta( self::META_STATUS ) ) );
+			$woo_refund->save();
+			return array( 'refund_id' => $refund_id, 'mollie_status' => (string) $woo_refund->get_meta( self::META_STATUS ) );
+		}
+		$attempt_id = (string) $woo_refund->get_meta( self::META_ATTEMPT_ID );
+		foreach ( $this->refund_items( $this->client->list_refunds( $payment_id ) ) as $refund ) {
+			$meta = $refund['metadata'] ?? array();
+			if ( (string) ( $meta['order_id'] ?? '' ) !== (string) $woo_refund->get_parent_id() || (string) ( $meta['woo_refund_id'] ?? '' ) !== (string) $woo_refund->get_id() ) { continue; }
+			// The attempt id is the POST's Idempotency-Key; a record with none predates it and the
+			// record id alone names the refund.
+			if ( '' !== $attempt_id && (string) ( $meta['refund_attempt_id'] ?? '' ) !== $attempt_id ) { continue; }
+			$stored = $this->store_refund( $woo_refund, $refund, (string) $woo_refund->get_meta( self::META_AMOUNT ) );
+			return array( 'refund_id' => $stored['refund_id'], 'mollie_status' => $stored['mollie_status'] );
+		}
+		return null;
+	}
+
+	/**
+	 * Mollie's refund statuses in Pro's three words. Anything unknown is still pending: never a
+	 * success or a failure Mollie did not report.
+	 *
+	 * @param string $mollie_status Mollie refund status.
+	 */
+	public static function pro_status( string $mollie_status ): string {
+		$statuses = array( 'refunded' => 'succeeded', 'queued' => 'pending', 'pending' => 'pending', 'processing' => 'pending', 'failed' => 'failed', 'canceled' => 'failed' );
+		return $statuses[ $mollie_status ] ?? 'pending';
+	}
+
+	/**
 	 * A refund Mollie first reported as queued/pending/processing settles later and
 	 * nothing else re-reads it (payment webhooks carry the payment, not its refunds),
 	 * so a replay refreshes the stored status; Mollie being unreachable keeps the last one.
@@ -176,7 +222,7 @@ class RefundReconciler {
 	private function store_refund( $woo_refund, array $refund, string $amount ): array {
 		$woo_refund->update_meta_data( self::META_MOLLIE_REFUND_ID, (string) ( $refund['id'] ?? '' ) );
 		$woo_refund->update_meta_data( self::META_STATUS, (string) ( $refund['status'] ?? 'queued' ) );
-		$woo_refund->update_meta_data( self::META_AMOUNT, $amount );
+		if ( '' !== $amount ) { $woo_refund->update_meta_data( self::META_AMOUNT, $amount ); }
 		$woo_refund->save();
 		return array( 'status' => 'refunded', 'refund_id' => (string) ( $refund['id'] ?? '' ), 'mollie_status' => (string) ( $refund['status'] ?? 'queued' ) );
 	}

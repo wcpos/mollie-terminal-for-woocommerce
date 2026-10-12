@@ -154,8 +154,7 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 			$payment_id = (string) ( $row['provider_refs']['action'] ?? $row['provider_refs']['transaction_id'] ?? '' );
 			if ( '' === $payment_id ) { return self::provider_error( __( 'No Mollie payment found for refund.', 'mollie-terminal-for-woocommerce' ), 'missing_payment_ref' ); }
 			$result = ( new RefundReconciler( $this->client ) )->refund( $order, $refund, $amount, (string) $refund->get_reason(), $payment_id );
-			$statuses = array( 'refunded' => 'succeeded', 'queued' => 'pending', 'pending' => 'pending', 'processing' => 'pending', 'failed' => 'failed', 'canceled' => 'failed' );
-			return array( 'status' => $statuses[ $result['mollie_status'] ] ?? 'pending', 'provider_ref' => $result['refund_id'] ?: null );
+			return array( 'status' => RefundReconciler::pro_status( (string) $result['mollie_status'] ), 'provider_ref' => $result['refund_id'] ?: null );
 		} catch ( MollieRefundPostUnansweredException $e ) {
 			// The POST itself went unanswered: the refund may exist. An error here would make
 			// WooCommerce delete the refund record, and a later refund would be a new record Mollie's
@@ -169,6 +168,39 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 			// A read Mollie did not answer, or a refusal: nothing was created, and the merchant sees it.
 			return self::provider_error( $e->getMessage() );
 		}
+	}
+
+	/**
+	 * Pro's refund sweep asking about an allocation that was answered pending. Every Mollie refund
+	 * starts queued, so this is the path that moves Pro's ledger from pending to refunded (or
+	 * failed) once Mollie has processed it. A refund the record cannot name yet (the POST went
+	 * unanswered) is looked for by its metadata, and the reference is handed back while still
+	 * pending so the sweep can keep it.
+	 *
+	 * @param array $row        Ledger row, or Pro's stand-in for a historical sale.
+	 * @param array $allocation The pending allocation: id (refund record), amount, status, provider_ref.
+	 * @return array|\WP_Error
+	 */
+	public function fetch_refund( array $row, array $allocation ) {
+		$refund = wc_get_order( (int) ( $allocation['id'] ?? 0 ) );
+		if ( ! $refund ) { return new \WP_Error( 'wcpos_refund_not_found', __( 'Order or refund not found.', 'mollie-terminal-for-woocommerce' ), array( 'status' => 404 ) ); }
+		$payment_id = (string) ( $row['provider_refs']['action'] ?? $row['provider_refs']['transaction_id'] ?? '' );
+		if ( '' === $payment_id ) { return self::provider_error( __( 'No Mollie payment found for refund.', 'mollie-terminal-for-woocommerce' ), 'missing_payment_ref' ); }
+		try {
+			// Under the same lock as the refund and its scheduled ask, which write the same record;
+			// one of them holding it is not an answer from Mollie, so the sweep asks again next run.
+			$result = \WCPOS\WooCommercePOS\MollieTerminal\PaymentLock::with_lock( (int) $refund->get_parent_id(), 'refund', function () use ( $refund, $payment_id, $allocation ) {
+				return ( new RefundReconciler( $this->client ) )->read( $refund, $payment_id, (string) ( $allocation['provider_ref'] ?? '' ) );
+			} );
+		} catch ( \WCPOS\WooCommercePOS\MollieTerminal\PaymentLockHeldException | \WCPOS\WooCommercePOS\MollieTerminal\PaymentLockErrorException | MollieUnansweredException $e ) {
+			return $this->indeterminate( 'mollie_unanswered', $e->getMessage() );
+		} catch ( RuntimeException | InvalidArgumentException $e ) {
+			// A read Mollie refused (a key it rejects, a refund it cannot show under it) proves
+			// nothing about the refund: the question stays open.
+			return self::provider_error( $e->getMessage() );
+		}
+		if ( null === $result ) { return array( 'status' => 'pending', 'provider_ref' => null ); }
+		return array( 'status' => RefundReconciler::pro_status( (string) $result['mollie_status'] ), 'provider_ref' => $result['refund_id'] ?: null );
 	}
 
 	public function verify_webhook( \WP_REST_Request $request ) {
