@@ -189,8 +189,10 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 		try {
 			// Under the same lock as the refund and its scheduled ask, which write the same record;
 			// one of them holding it is not an answer from Mollie, so the sweep asks again next run.
+			// The record is read again inside the lock, so a write the ask made is seen.
 			$result = \WCPOS\WooCommercePOS\MollieTerminal\PaymentLock::with_lock( (int) $refund->get_parent_id(), 'refund', function () use ( $refund, $payment_id, $allocation ) {
-				return ( new RefundReconciler( $this->client ) )->read( $refund, $payment_id, (string) ( $allocation['provider_ref'] ?? '' ) );
+				$fresh = wc_get_order( $refund->get_id() );
+				return ( new RefundReconciler( $this->client ) )->read( $fresh ? $fresh : $refund, $payment_id, (string) ( $allocation['provider_ref'] ?? '' ) );
 			} );
 		} catch ( \WCPOS\WooCommercePOS\MollieTerminal\PaymentLockHeldException | \WCPOS\WooCommercePOS\MollieTerminal\PaymentLockErrorException $e ) {
 			return $this->indeterminate( 'mollie_refund_locked', $e->getMessage() );
