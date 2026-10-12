@@ -31,7 +31,8 @@ class MollieApiClient {
 	public function get_payment( string $payment_id, array $include = array() ): array { return $this->request( 'GET', '/payments/' . rawurlencode( $payment_id ) . $this->include_query( $include ) ); }
 	public function cancel_payment( string $payment_id ): array { return $this->request( 'DELETE', '/payments/' . rawurlencode( $payment_id ) ); }
 	public function get_refund( string $payment_id, string $refund_id ): array { return $this->request( 'GET', '/payments/' . rawurlencode( $payment_id ) . '/refunds/' . rawurlencode( $refund_id ) ); }
-	public function list_refunds( string $payment_id ): array { return $this->request( 'GET', '/payments/' . rawurlencode( $payment_id ) . '/refunds' ); }
+	/** The largest page Mollie serves; a payment's refunds are matched by metadata, so none may be left off it. */
+	public function list_refunds( string $payment_id ): array { return $this->request( 'GET', '/payments/' . rawurlencode( $payment_id ) . '/refunds?limit=250' ); }
 	public function create_refund( string $payment_id, array $payload, string $idempotency_key = '' ): array {
 		$headers = '' === $idempotency_key ? array() : array( 'Idempotency-Key' => $idempotency_key );
 		return $this->request( 'POST', '/payments/' . rawurlencode( $payment_id ) . '/refunds', $payload, 0, $headers );
