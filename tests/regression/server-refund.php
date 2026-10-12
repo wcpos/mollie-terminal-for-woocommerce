@@ -219,7 +219,7 @@ expect( is_wp_error( $r ) && 'wcpos_provider_error' === $r->get_error_code() && 
 $wpdb->rows['mtfwc_lock_order_123_refund'] = json_encode( array( 'token' => 'other', 'expires_at' => time() + 60 ) );
 $client->refreshed = 'refunded'; $client->calls = array();
 $r = $provider->fetch_refund( $row, $pending );
-expect( is_wp_error( $r ) && true === $r->get_error_data()['indeterminate'] && array() === $client->calls, 'a held order lock is indeterminate and Mollie is not asked' );
+expect( is_wp_error( $r ) && 'mollie_refund_locked' === $r->get_error_code() && true === $r->get_error_data()['indeterminate'] && array() === $client->calls, 'a held order lock is indeterminate under its own code and Mollie is not asked' );
 unset( $wpdb->rows['mtfwc_lock_order_123_refund'] );
 // No reference on the allocation (the POST went unanswered): found by the metadata the POST carried,
 // stored on the record, and handed back while still queued. Nothing is posted.

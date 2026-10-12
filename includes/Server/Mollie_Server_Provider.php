@@ -192,7 +192,9 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 			$result = \WCPOS\WooCommercePOS\MollieTerminal\PaymentLock::with_lock( (int) $refund->get_parent_id(), 'refund', function () use ( $refund, $payment_id, $allocation ) {
 				return ( new RefundReconciler( $this->client ) )->read( $refund, $payment_id, (string) ( $allocation['provider_ref'] ?? '' ) );
 			} );
-		} catch ( \WCPOS\WooCommercePOS\MollieTerminal\PaymentLockHeldException | \WCPOS\WooCommercePOS\MollieTerminal\PaymentLockErrorException | MollieUnansweredException $e ) {
+		} catch ( \WCPOS\WooCommercePOS\MollieTerminal\PaymentLockHeldException | \WCPOS\WooCommercePOS\MollieTerminal\PaymentLockErrorException $e ) {
+			return $this->indeterminate( 'mollie_refund_locked', $e->getMessage() );
+		} catch ( MollieUnansweredException $e ) {
 			return $this->indeterminate( 'mollie_unanswered', $e->getMessage() );
 		} catch ( RuntimeException | InvalidArgumentException $e ) {
 			// A read Mollie refused (a key it rejects, a refund it cannot show under it) proves
