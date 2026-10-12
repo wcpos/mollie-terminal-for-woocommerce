@@ -181,6 +181,14 @@ expect( '1' === $orders[456]->meta[ RefundReconciler::META_LEGS ] && 're_x' === 
 // A replay of leg A refreshes leg A's refund against payment A only.
 $client->refreshed = 'refunded'; $client->calls = array();
 expect( array( 'status' => 'succeeded', 'provider_ref' => 're_x' ) === $provider->refund( array( 'order_id' => 123, 'provider_refs' => array( 'action' => 'tr_a' ) ), 456, '5.00' ) && array( 'refund:re_x' ) === $client->calls && 'refunded' === $orders[456]->meta[ RefundReconciler::META_STATUS . ':tr_a' ] && 'queued' === $orders[456]->meta[ RefundReconciler::META_STATUS . ':tr_b' ], 'a replay refreshes its own leg only' );
+// A record from before legs were kept apart: its first per-payment write moves the plain facts under
+// its one payment, so a later replay still finds the refund it made and never posts again.
+$orders[456] = new WC_Order_Refund(); $orders[456]->meta = array( RefundReconciler::META_MOLLIE_REFUND_ID => 're_legacy', RefundReconciler::META_STATUS => 'queued', RefundReconciler::META_ATTEMPT_ID => 'attempt_legacy', RefundReconciler::META_AMOUNT => '5.00' );
+$client->refreshed = 'refunded'; $client->calls = array(); $client->post_keys = array();
+expect( array( 'status' => 'succeeded', 'provider_ref' => 're_legacy' ) === $provider->refund( $row, 456, '5.00' ) && array( 'refund:re_legacy' ) === $client->calls, 'a legacy record is refreshed through its plain id' );
+expect( 're_legacy' === $orders[456]->meta[ RefundReconciler::META_MOLLIE_REFUND_ID . ':tr_explicit' ] && 'attempt_legacy' === $orders[456]->meta[ RefundReconciler::META_ATTEMPT_ID . ':tr_explicit' ] && '5.00' === $orders[456]->meta[ RefundReconciler::META_AMOUNT . ':tr_explicit' ] && '1' === $orders[456]->meta[ RefundReconciler::META_LEGS ], 'the plain facts moved under the payment' );
+$client->calls = array();
+expect( array( 'status' => 'succeeded', 'provider_ref' => 're_legacy' ) === $provider->refund( $row, 456, '5.00' ) && array( 'refund:re_legacy' ) === $client->calls && array() === $client->post_keys, 'the next replay still reads the legacy refund and posts nothing' );
 $client->refunds = array();
 $orders[456] = new WC_Order_Refund();
 $client->status = new RuntimeException( 'offline' );
@@ -207,6 +215,10 @@ foreach ( array( 'queued' => 'pending', 'processing' => 'pending', 'failed' => '
 $client->refreshed = new WCPOS\WooCommercePOS\MollieTerminal\Services\MollieUnansweredException( 'timed out' );
 $r = $provider->fetch_refund( $row, $pending );
 expect( is_wp_error( $r ) && true === $r->get_error_data()['indeterminate'] && 'something_new' === $orders[456]->saved[ RefundReconciler::META_STATUS . ':tr_explicit' ], 'an unanswered read is indeterminate and changes nothing' );
+// A record from before legs, read for a reference-less allocation: the plain id is the payment's.
+$orders[456] = new WC_Order_Refund(); $orders[456]->meta = array( RefundReconciler::META_MOLLIE_REFUND_ID => 're_plain', RefundReconciler::META_STATUS => 'queued' );
+$client->refreshed = 'refunded'; $client->calls = array();
+expect( array( 'status' => 'succeeded', 'provider_ref' => 're_plain' ) === $provider->fetch_refund( $row, array( 'id' => 456, 'amount' => '5.00', 'status' => 'pending', 'provider_ref' => null ) ) && array( 'refund:re_plain' ) === $client->calls, 'a legacy record\'s plain id answers a reference-less allocation' );
 // The record's own reference for this payment wins over a stale allocation reference.
 $orders[456] = new WC_Order_Refund(); $orders[456]->meta = array( RefundReconciler::META_MOLLIE_REFUND_ID . ':tr_explicit' => 're_record', RefundReconciler::META_LEGS => '1' );
 $client->refreshed = 'refunded'; $client->calls = array();
@@ -241,7 +253,11 @@ expect( array( 'status' => 'pending', 'provider_ref' => null ) === $provider->fe
 // A split record: leg A has no reference yet, leg B's refund id is on the record; leg A is found by its
 // own metadata on its own payment, never read through leg B's id.
 $orders[456] = new WC_Order_Refund(); $orders[456]->meta = array( RefundReconciler::META_LEGS => '1', RefundReconciler::META_ATTEMPT_ID . ':tr_a' => 'attempt_a', RefundReconciler::META_MOLLIE_REFUND_ID . ':tr_b' => 're_b', RefundReconciler::META_MOLLIE_REFUND_ID => 're_b' );
-$client->refunds = array( array( 'id' => 're_a', 'status' => 'queued', 'metadata' => array( 'order_id' => '123', 'woo_refund_id' => '456', 'refund_attempt_id' => 'attempt_a' ) ) );
+$orders[456]->meta[ RefundReconciler::META_ATTEMPT_ID ] = 'attempt_plain_ignored';
+$client->refunds = array(
+	array( 'id' => 're_wrong', 'status' => 'refunded', 'metadata' => array( 'order_id' => '123', 'woo_refund_id' => '456', 'refund_attempt_id' => 'attempt_plain_ignored' ) ),
+	array( 'id' => 're_a', 'status' => 'queued', 'metadata' => array( 'order_id' => '123', 'woo_refund_id' => '456', 'refund_attempt_id' => 'attempt_a' ) ),
+);
 $client->calls = array();
 expect( array( 'status' => 'pending', 'provider_ref' => 're_a' ) === $provider->fetch_refund( array( 'order_id' => 123, 'provider_refs' => array( 'action' => 'tr_a' ) ), $unreferenced ) && array( 'tr_a' ) === $client->calls && 're_a' === $orders[456]->saved[ RefundReconciler::META_MOLLIE_REFUND_ID . ':tr_a' ] && 're_b' === $orders[456]->saved[ RefundReconciler::META_MOLLIE_REFUND_ID . ':tr_b' ], 'a split record\'s leg is found on its own payment, and the other leg\'s id is untouched' );
 // Next run the allocation carries the reference: read by it.

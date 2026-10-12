@@ -101,6 +101,16 @@ class RefundReconciler {
 	 * @param string           $value      Value.
 	 */
 	private static function set_leg( $woo_refund, string $key, string $payment_id, string $value ): void {
+		if ( '1' !== (string) $woo_refund->get_meta( self::META_LEGS ) ) {
+			// The first per-payment write on a record from before legs were kept apart: its plain
+			// facts belong to this payment (it had one), so they move under it before the marker
+			// stops them being read. Without this the next replay would see no refund id and no
+			// attempt id, post again under a new key, and refund twice.
+			foreach ( array( self::META_MOLLIE_REFUND_ID, self::META_STATUS, self::META_AMOUNT, self::META_ATTEMPT_ID ) as $plain ) {
+				$legacy = (string) $woo_refund->get_meta( $plain );
+				if ( '' !== $legacy ) { $woo_refund->update_meta_data( $plain . ':' . $payment_id, $legacy ); }
+			}
+		}
 		$woo_refund->update_meta_data( $key . ':' . $payment_id, $value );
 		$woo_refund->update_meta_data( self::META_LEGS, '1' );
 		if ( self::META_MOLLIE_REFUND_ID === $key ) { $woo_refund->update_meta_data( $key, $value ); }
