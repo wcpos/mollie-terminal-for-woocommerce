@@ -2,7 +2,7 @@
 
 All notable changes to Mollie Terminal for WooCommerce will be documented in this file.
 
-## Unreleased
+## 0.5.10 - 2026-10-15
 
 The POS order-pay page (the Legacy tab) runs through WooCommerce POS's shared order-pay panel, so a Legacy-tab payment is a ledger row like a keypad payment: its polling, cancel, deadline, settlement and refunds are the POS's. While an on-screen QR method (iDEAL, Bancontact) is enabled the plugin's own panel stays, because a QR code has no home in the shared panel yet. On update, terminal attempts the old panel left mid-flight are folded into the POS once (25 orders per request, under the POS order lock) and complete or cancel through it; the old panel's webhook and sweep leave those attempts alone while the POS's leg is live (the cleanup still cancels one when the order is paid another way), a browser tab still showing the old panel is told to reload, and no old-panel payment can be started while the shared panel is in use. Once the POS's leg has ended without money the old panel and its webhook act on the payment as before. The shared panel adopts an open old attempt before it renders, so the pass need not have reached the order first. With a QR method enabled nothing is adopted: the old panel owns its attempts. Refunds of a payment the shared panel took go through the POS; a payment the old panel took refunds as before, and on an order carrying both the old-panel payment is refunded when the POS cannot allocate the amount. A payment the shared panel takes carries its Mollie payment id as the order's transaction id, as the old panel did, whether a poll or Mollie's webhook settled it.
 
