@@ -2,7 +2,7 @@
 
 All notable changes to Mollie Terminal for WooCommerce will be documented in this file.
 
-## Unreleased
+## 0.5.10 - 2026-10-15
 
 ### Fixed
 
