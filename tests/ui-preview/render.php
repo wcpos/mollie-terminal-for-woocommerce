@@ -45,7 +45,7 @@ function get_option( $key, $default = array() ) {
 }
 function admin_url( $path = '' ) { return 'mock-ajax'; }
 function add_query_arg( array $args, $url ) { return $url . '?' . http_build_query( $args ); }
-function woocommerce_pos_request( $type = 'all' ) { return true; }
+function wcpos_request( $type = 'all' ) { return true; }
 
 class WC_Payment_Gateway {
 	public $id;
