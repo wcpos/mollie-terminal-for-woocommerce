@@ -252,7 +252,7 @@ class Gateway extends WC_Payment_Gateway {
 			}
 		}
 
-		$is_pos = function_exists( 'woocommerce_pos_request' ) && woocommerce_pos_request();
+		$is_pos = function_exists( 'wcpos_request' ) && wcpos_request();
 		$locked = $settings->lock_terminal();
 		$qr_data = $qr_methods ? ' data-qr-methods="' . esc_attr( implode( ',', $qr_methods ) ) . '" data-resume-channel="' . esc_attr( $resume_channel ) . '"' : '';
 		echo '<div id="mtfwc-payment-interface" class="mtfwc-payment-interface" data-order-id="' . esc_attr( $order_id ) . '" data-order-token="' . esc_attr( $order_token ) . '" data-default-terminal-id="' . esc_attr( $settings->default_terminal_id() ) . '" data-pos="' . ( $is_pos ? '1' : '0' ) . '" data-lock-terminal="' . ( $locked ? '1' : '0' ) . '" data-resume="' . ( $resume ? '1' : '0' ) . '"' . $qr_data . ' data-gateway-id="' . esc_attr( Settings::GATEWAY_ID ) . '">';
