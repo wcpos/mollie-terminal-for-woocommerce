@@ -59,7 +59,17 @@ jobs:
 
       - name: Build ZIP
         if: steps.check_release.outputs.release == 'true'
-        run: zip -r mollie-terminal-for-woocommerce.zip . -x "*.git*"
+        run: |
+          # WordPress 7.1.4+ unpacks packages into a randomly suffixed folder and installs a flat zip
+          # there, so the zip must hold the installed folder (catalog slug) as its only top-level entry.
+          mkdir -p "$RUNNER_TEMP/stage/mollie-terminal-for-woocommerce"
+          rsync -a --exclude='.git*' ./ "$RUNNER_TEMP/stage/mollie-terminal-for-woocommerce/"
+          (cd "$RUNNER_TEMP/stage" && zip -r "$GITHUB_WORKSPACE/mollie-terminal-for-woocommerce.zip" "mollie-terminal-for-woocommerce" -x "*.git*")
+          TOP_LEVEL=$(unzip -Z1 mollie-terminal-for-woocommerce.zip | cut -d/ -f1 | sort -u)
+          if [ "$TOP_LEVEL" != "mollie-terminal-for-woocommerce" ]; then
+            echo "::error::mollie-terminal-for-woocommerce.zip must contain only mollie-terminal-for-woocommerce/ at the top level, found: $TOP_LEVEL"
+            exit 1
+          fi
 
       - name: Create release and upload ZIP
         if: steps.check_release.outputs.release == 'true'
