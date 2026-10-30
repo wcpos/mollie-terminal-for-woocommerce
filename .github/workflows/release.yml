@@ -1,9 +1,16 @@
 name: Release
 
+# A stable release is cut by a push to `main` whose plugin header carries a new X.Y.Z.
+# A beta is cut by dispatching this workflow on `next` with an X.Y.Z-betaN header: it is
+# published as a GitHub prerelease, which `releases/latest` never returns, so the
+# extension catalog and every merchant's updater never see it. Beta testers install
+# the zip by hand. The two guards below keep the lanes apart: a push never cuts a beta
+# and a dispatch never cuts a stable.
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -27,13 +34,27 @@ jobs:
         run: |
           set -euo pipefail
 
-          VERSION=$(grep -oP "Version:\s*\K\d+(\.\d+)*" mollie-terminal-for-woocommerce.php)
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          VERSION=$(grep -oP "Version:\s*\K[0-9A-Za-z.-]+" mollie-terminal-for-woocommerce.php)
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta[0-9]+)?$ ]]; then
             echo "Error: Invalid version format: $VERSION"
             exit 1
           fi
+          if [[ "$VERSION" == *-beta* ]]; then
+            if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] || [ "$GITHUB_REF" != "refs/heads/next" ]; then
+              echo "::error::$VERSION is a beta; a beta is cut only by dispatching this workflow on next, never by a push to main or from another ref"
+              exit 1
+            fi
+            PRERELEASE=true
+          else
+            if [ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]; then
+              echo "::error::$VERSION is a stable version; a stable release is cut only by a push to main"
+              exit 1
+            fi
+            PRERELEASE=false
+          fi
 
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "PRERELEASE=$PRERELEASE" >> "$GITHUB_ENV"
           git fetch --prune --tags
 
           if ! git tag | grep -qx "v$VERSION"; then
@@ -59,7 +80,18 @@ jobs:
 
       - name: Build ZIP
         if: steps.check_release.outputs.release == 'true'
-        run: zip -r mollie-terminal-for-woocommerce.zip . -x "*.git*"
+        run: |
+          set -euo pipefail
+          # WordPress 7.1.4+ unpacks packages into a randomly suffixed folder and installs a flat zip
+          # there, so the zip must hold the installed folder (catalog slug) as its only top-level entry.
+          mkdir -p "$RUNNER_TEMP/stage/mollie-terminal-for-woocommerce"
+          rsync -a --exclude='.git*' ./ "$RUNNER_TEMP/stage/mollie-terminal-for-woocommerce/"
+          (cd "$RUNNER_TEMP/stage" && zip -r "$GITHUB_WORKSPACE/mollie-terminal-for-woocommerce.zip" "mollie-terminal-for-woocommerce" -x "*.git*")
+          TOP_LEVEL=$(unzip -Z1 mollie-terminal-for-woocommerce.zip | cut -d/ -f1 | sort -u)
+          if [ "$TOP_LEVEL" != "mollie-terminal-for-woocommerce" ]; then
+            echo "::error::mollie-terminal-for-woocommerce.zip must contain only mollie-terminal-for-woocommerce/ at the top level, found: $TOP_LEVEL"
+            exit 1
+          fi
 
       - name: Create release and upload ZIP
         if: steps.check_release.outputs.release == 'true'
@@ -70,16 +102,28 @@ jobs:
           NOTES_ARGS=(--notes "Release v$VERSION")
           if [ -f "$NOTES_FILE" ]; then
             NOTES_ARGS=(--notes-file "$NOTES_FILE")
+          elif [ "$PRERELEASE" = "true" ] && [ -f CHANGELOG.md ]; then
+            # A beta is the unreleased work; its notes are the CHANGELOG's Unreleased section as it stands.
+            awk '/^## / { if (found) exit; if ($0 == "## Unreleased") found=1; next } found { print }' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
+            if [ -s "$RUNNER_TEMP/release-notes.md" ]; then
+              NOTES_ARGS=(--notes-file "$RUNNER_TEMP/release-notes.md")
+            fi
+          fi
+          PRERELEASE_ARGS=()
+          if [ "$PRERELEASE" = "true" ]; then
+            PRERELEASE_ARGS=(--prerelease)
           fi
 
           if gh release view "v$VERSION" >/dev/null 2>&1; then
             gh release upload "v$VERSION" mollie-terminal-for-woocommerce.zip --clobber
             gh release edit "v$VERSION" "${NOTES_ARGS[@]}"
           else
+            # Without --target a missing tag is created from the default branch, not the commit built here.
             gh release create "v$VERSION" \
               mollie-terminal-for-woocommerce.zip \
+              --target "$GITHUB_SHA" \
               --title "Release v$VERSION" \
-              "${NOTES_ARGS[@]}"
+              "${NOTES_ARGS[@]}" "${PRERELEASE_ARGS[@]}"
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
