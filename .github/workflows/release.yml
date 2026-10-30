@@ -40,8 +40,8 @@ jobs:
             exit 1
           fi
           if [[ "$VERSION" == *-beta* ]]; then
-            if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]; then
-              echo "::error::$VERSION is a beta; a beta is cut only by dispatching this workflow, never by a push to main"
+            if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] || [ "$GITHUB_REF" != "refs/heads/next" ]; then
+              echo "::error::$VERSION is a beta; a beta is cut only by dispatching this workflow on next, never by a push to main or from another ref"
               exit 1
             fi
             PRERELEASE=true
@@ -118,8 +118,10 @@ jobs:
             gh release upload "v$VERSION" mollie-terminal-for-woocommerce.zip --clobber
             gh release edit "v$VERSION" "${NOTES_ARGS[@]}"
           else
+            # Without --target a missing tag is created from the default branch, not the commit built here.
             gh release create "v$VERSION" \
               mollie-terminal-for-woocommerce.zip \
+              --target "$GITHUB_SHA" \
               --title "Release v$VERSION" \
               "${NOTES_ARGS[@]}" "${PRERELEASE_ARGS[@]}"
           fi
