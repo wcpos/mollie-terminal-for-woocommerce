@@ -2,7 +2,7 @@
 // Issue #21 review: the completed order may be a re-read copy, leaving the
 // AJAX order unpaid in memory. Every paid answer needs the thank-you URL.
 function expect( $condition, $message = 'expectation failed' ) { if ( ! $condition ) { fwrite( STDERR, $message . "\n" ); exit( 1 ); } }
-function woocommerce_pos_request() { return true; }
+function wcpos_request() { return true; }
 function get_home_url( $blog_id = null, $path = '' ) { return 'https://example.test' . $path; }
 function add_query_arg( $args, $url ) { return $url . '?' . http_build_query( $args ); }
 

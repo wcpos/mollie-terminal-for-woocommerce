@@ -12,7 +12,7 @@ function wcpos_pro_order_pay_process( $order ) { $GLOBALS['pro_calls'][] = $orde
 function wc_add_notice( $message, $type = 'notice' ) { $GLOBALS['notices'][] = $type; }
 class SilentLoggerForProcessPayment { public function log( $level, $message, $context = array() ) {} }
 function wc_get_logger() { return new SilentLoggerForProcessPayment(); }
-function woocommerce_pos_request() { return true; }
+function wcpos_request() { return true; }
 function get_home_url( $blog, $path ) { return 'https://shop.example' . $path; }
 function add_query_arg( $args, $url ) { return $url . '?key=' . $args['key']; }
 

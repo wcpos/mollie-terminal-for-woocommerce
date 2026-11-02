@@ -8,7 +8,7 @@ class WC_Payment_Gateway {
 	public $enabled = 'yes'; // The old web-checkout setting, saved before the upgrade.
 	public function is_available() { return 'yes' === $this->enabled; }
 }
-function woocommerce_pos_request() { return $GLOBALS['pos_request']; }
+function wcpos_request() { return $GLOBALS['pos_request']; }
 function is_checkout_pay_page() { return $GLOBALS['order_pay']; }
 function current_user_can( $capability ) { return 'access_woocommerce_pos' === $capability && $GLOBALS['pos_user']; }
 function get_option( $key, $default = false ) { return $GLOBALS['options'][ $key ] ?? $default; }
