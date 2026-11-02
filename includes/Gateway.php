@@ -39,7 +39,7 @@ class Gateway extends WC_Payment_Gateway {
 		if ( '' === $settings->api_key() ) {
 			return false;
 		}
-		if ( function_exists( 'woocommerce_pos_request' ) && woocommerce_pos_request() ) {
+		if ( function_exists( 'wcpos_request' ) && wcpos_request() ) {
 			return true;
 		}
 		return function_exists( 'is_checkout_pay_page' ) && is_checkout_pay_page() && current_user_can( 'access_woocommerce_pos' ) && $settings->enabled_for_pos();
