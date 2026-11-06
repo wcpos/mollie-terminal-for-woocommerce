@@ -62,6 +62,12 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 			}
 			$order = wc_get_order( (int) $row['order_id'] );
 			if ( ! $order ) { return new \WP_Error( 'wcpos_order_not_found', __( 'Order not found.', 'mollie-terminal-for-woocommerce' ), array( 'status' => 404 ) ); }
+			// No tile payment beside an attempt Mollie reported paid on this unpaid order either: first,
+			// since the open check below also catches a `paid_unverified` attempt, with the wrong advice.
+			$paid_hold = Legacy_Adoption::paid_hold_message( $order );
+			if ( '' !== $paid_hold ) {
+				return new \WP_Error( 'mtfwc_legacy_attempt_paid', $paid_hold, array( 'status' => 409 ) );
+			}
 			// No tile payment beside the old panel's open attempt: a double charge. A replay meets one only if
 			// it predates this fix: the old panel now refuses a start beside a live row, under this same order lock.
 			$current = PaymentAttempt::current( $order );

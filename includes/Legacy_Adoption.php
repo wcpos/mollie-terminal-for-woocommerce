@@ -213,6 +213,23 @@ final class Legacy_Adoption {
 		return false;
 	}
 
+	/**
+	 * Why no new charge may start beside the order's current attempt: Mollie reported it paid, the
+	 * order is still unpaid, and Pro does not own it. A `paid` attempt's completion died (the sweep
+	 * finishes it); a `paid_unverified` one does not match the order and needs a person. '' when
+	 * nothing holds a new charge.
+	 */
+	public static function paid_hold_message( $order ): string {
+		$current = PaymentAttempt::current( $order );
+		$status  = (string) ( $current['status'] ?? '' );
+		if ( ! $current || ! PaymentAttempt::reported_paid( $status ) || $order->is_paid() || self::owned_by_pro( $order, (string) $current['payment_id'] ) ) {
+			return '';
+		}
+		return 'paid' === $status
+			? __( 'An earlier Mollie payment for this sale was paid and is being recorded. Reload in a few minutes.', 'mollie-terminal-for-woocommerce' )
+			: __( 'An earlier Mollie payment for this sale was paid but does not match the order. Check it in the Mollie dashboard before charging again.', 'mollie-terminal-for-woocommerce' );
+	}
+
 	/** The old panel's refusal beside a live ledger row, in Free's words. */
 	public static function till_message(): string {
 		return __( 'This sale has a payment recorded at the till. Finish it at the till.', 'mollie-terminal-for-woocommerce' );
