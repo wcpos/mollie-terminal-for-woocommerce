@@ -4,6 +4,7 @@ namespace WCPOS\WooCommercePOS\MollieTerminal;
 use Exception;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieApiClient;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MolliePaymentService;
+use WCPOS\WooCommercePOS\MollieTerminal\Services\StartRefusedException;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\TerminalService;
 
 class AjaxHandler {
@@ -146,6 +147,14 @@ class AjaxHandler {
 			if ( Legacy_Adoption::owns_order( $order ) || ( 'start_payment' === $operation && $this->settings()->uses_pro_panel() ) ) {
 				wp_send_json_error( __( 'This payment is now handled by WooCommerce POS. Reload the page.', 'mollie-terminal-for-woocommerce' ), 409 );
 			}
+			// Under the QR carve-out too, no old-panel start beside a live row in Free's ledger, of any
+			// method: the old panel charges the order total, so a second payment beside Pro's leg is a
+			// double charge, and beside a till tender an overcharge. start_attempt() checks again under
+			// the order lock. A paid order goes on to answer already_paid: its own completed attempt
+			// has a row too.
+			if ( 'start_payment' === $operation && Legacy_Adoption::has_live_row( $order ) && ! $order->is_paid() ) {
+				wp_send_json_error( Legacy_Adoption::till_message(), 409 );
+			}
 			$result = $callback( $order );
 			if ( is_array( $result ) ) {
 				// The order is already reconciled and paid, so re-submitting the
@@ -155,6 +164,9 @@ class AjaxHandler {
 			}
 			Logger::log( 'Mollie Terminal AJAX request completed.', array( 'operation' => $operation, 'order_id' => $order_id, 'status' => is_array( $result ) ? ( $result['status'] ?? '' ) : '' ), 'success' );
 			wp_send_json_success( $result );
+		} catch ( StartRefusedException $e ) {
+			Logger::log( 'Mollie Terminal start refused: ' . $e->getMessage(), array( 'operation' => $operation ), 'info' );
+			wp_send_json_error( $e->getMessage(), 409 );
 		} catch ( Exception $e ) {
 			Logger::log( 'Mollie Terminal AJAX failed: ' . $e->getMessage(), array( 'operation' => $operation ), 'error' );
 			wp_send_json_error( $e->getMessage(), 500 );

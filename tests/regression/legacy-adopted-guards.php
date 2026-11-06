@@ -23,10 +23,13 @@ function wp_salt( $scheme = '' ) { return 'salt'; }
 function get_option( $key, $default = false ) { return $GLOBALS['options'][ $key ] ?? $default; }
 function clean_post_cache( $id ) {}
 function admin_url( $path = '' ) { return 'https://shop.example/wp-admin/' . $path; }
-function add_query_arg( $args, $url = '' ) { return $url . '?' . http_build_query( $args ); }
-function wc_get_order( $id ) { return $GLOBALS['order']; }
+function wc_get_order( $id ) { return ( \WCPOS\WooCommercePOS\Payments\Contract\Order_Lock::$held && isset( $GLOBALS['fresh_order'] ) ) ? $GLOBALS['fresh_order'] : $GLOBALS['order']; }
 function wcpos_pro_payment_id_for_action( $provider, $ref ) { return $GLOBALS['adopted_map'][ $ref ] ?? null; }
-function wcpos_get_settings( $id, $key = null ) { return array( 'gateways' => array( 'mollie_terminal_for_woocommerce' => array( 'enabled' => true ) ) ); }
+function wcpos_get_settings( $id, $key = null ) {
+	// Read inside the start callback, after the AJAX ledger check: a row set here lands between the two.
+	if ( isset( $GLOBALS['late_row'] ) ) { $GLOBALS['ledger_rows'][777][] = $GLOBALS['late_row']; unset( $GLOBALS['late_row'] ); }
+	return array( 'gateways' => array( 'mollie_terminal_for_woocommerce' => array( 'enabled' => true ) ) );
+}
 function wp_remote_request( $url, $args ) { $GLOBALS['http'][] = $url; return new WP_Error( 'http_request_failed', 'offline' ); }
 class SilentLoggerForGuards { public function log( $level, $message, $context = array() ) { $GLOBALS['log'][] = $message; } }
 function wc_get_logger() { return new SilentLoggerForGuards(); }
@@ -34,8 +37,17 @@ class JsonResponseForGuards extends Error { public $data; public $status; public
 function wp_send_json_error( $data = null, $status_code = null ) { throw new JsonResponseForGuards( $data, (int) $status_code ); }
 function wp_send_json_success( $data = null, $status_code = null ) { throw new JsonResponseForGuards( $data, 200 ); }
 
+// The old panel's render (payment_fields) and Pro's tile create (Mollie_Server_Provider) load here too.
+class WC_Payment_Gateway { public $id; public $method_title; public $method_description; public $supports = array(); public $title; public $description; public $form_fields = array(); public function init_settings() {} public function get_option( $key, $default = '' ) { return $default; } }
+function is_checkout_pay_page() { return true; }
+function esc_html( $text ) { return htmlspecialchars( (string) $text, ENT_QUOTES, 'UTF-8' ); }
+function esc_attr( $text ) { return esc_html( $text ); }
+function esc_html__( $text, $domain = null ) { return $text; }
+function esc_attr__( $text, $domain = null ) { return $text; }
+function wp_kses_post( $text ) { return $text; }
 require_once __DIR__ . '/stubs/wcpos-pro-server.php';
 require_once __DIR__ . '/stubs/ledger.php';
+require_once __DIR__ . '/stubs/order-lock.php';
 function wc_get_orders( $args ) { return ( $GLOBALS['order'] ?? null ) && ( $GLOBALS['order']->meta[ '_mtfwc_current_payment_id' ] ?? null ) === ( $args['meta_value'] ?? null ) ? array( $GLOBALS['order'] ) : array(); }
 require_once __DIR__ . '/../../includes/Settings.php';
 require_once __DIR__ . '/../../includes/Logger.php';
@@ -51,13 +63,20 @@ require_once __DIR__ . '/../../includes/PaymentSweeper.php';
 require_once __DIR__ . '/../../includes/PaymentCleanup.php';
 require_once __DIR__ . '/../../includes/AjaxHandler.php';
 require_once __DIR__ . '/../../includes/WebhookHandler.php';
+require_once __DIR__ . '/../../includes/Gateway.php';
+require_once __DIR__ . '/../../includes/Server/Mollie_Server_Provider.php';
 
 use WCPOS\WooCommercePOS\MollieTerminal\AjaxHandler;
+use WCPOS\WooCommercePOS\MollieTerminal\Gateway;
+use WCPOS\WooCommercePOS\MollieTerminal\Server\Mollie_Server_Provider;
+use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieApiClient;
+use WCPOS\WooCommercePOS\MollieTerminal\Settings;
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentAttempt;
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentCleanup;
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentSweeper;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MolliePaymentService;
 use WCPOS\WooCommercePOS\MollieTerminal\WebhookHandler;
+use WCPOS\WooCommercePOS\Payments\Contract\Order_Lock;
 
 $wpdb = new FakeWpdb();
 $GLOBALS['options'] = array( 'woocommerce_mollie_terminal_for_woocommerce_settings' => array( 'api_key' => 'live_k' ) );
@@ -85,6 +104,7 @@ class FakeOrderForGuards {
 	public function set_payment_method( $m ) { $this->payment_method = (string) $m; }
 	public function set_payment_method_title( $t ) { $this->payment_method_title = (string) $t; }
 }
+class FreshOrderForGuards extends FakeOrderForGuards { public function get_id() { return 778; } }
 class CountingServiceForGuards extends MolliePaymentService {
 	public $cancels = 0; public $polls = 0;
 	public function __construct() {}
@@ -156,7 +176,102 @@ $_POST = array( 'order_id' => '777', 'order_token' => AjaxHandler::order_token( 
 try { ( new AjaxHandler() )->mtfwc_start_payment(); expect( false, 'start should answer' ); } catch ( JsonResponseForGuards $r ) { expect( 409 === $r->status, 'under Pro\'s panel an old-panel start is refused even with nothing adopted' ); }
 $GLOBALS['options']['woocommerce_mollie_terminal_for_woocommerce_settings']['qr_methods'] = array( 'ideal' );
 $_POST = array( 'order_id' => '777', 'order_token' => AjaxHandler::order_token( 777 ), 'channel' => 'qr', 'qr_method' => 'ideal' );
-try { ( new AjaxHandler() )->mtfwc_start_payment(); expect( false, 'start should answer' ); } catch ( JsonResponseForGuards $r ) { expect( 409 !== $r->status, 'under the QR carve-out the old panel starts as before (here it reaches Mollie)' ); }
+$kept_rows = $GLOBALS['ledger_rows']; $GLOBALS['ledger_rows'] = array(); $GLOBALS['http'] = array();
+try { ( new AjaxHandler() )->mtfwc_start_payment(); expect( false, 'start should answer' ); } catch ( JsonResponseForGuards $r ) { expect( 409 !== $r->status && array( 'https://api.mollie.com/v2/payments?include=details.qrCode' ) === $GLOBALS['http'], 'under the QR carve-out, with no ledger rows, the old panel starts as before (here it reaches Mollie)' ); }
+expect( in_array( 777, Order_Lock::$locked, true ), 'the create runs under Free\'s order lock, the one Pro creates its payment under' );
+
+// Under the QR carve-out, no old-panel start beside a live row in Free's ledger, of any method.
+$till = 'This sale has a payment recorded at the till. Finish it at the till.';
+$start_refused = static function ( string $message ) use ( $till ) {
+	$GLOBALS['http'] = array();
+	try { ( new AjaxHandler() )->mtfwc_start_payment(); expect( false, 'start should answer' ); } catch ( JsonResponseForGuards $r ) {
+		expect( 409 === $r->status && $till === $r->data && array() === $GLOBALS['http'], $message );
+	}
+};
+// Pro's tile leg, pending and never adopted (no attempt pointer, no adoption record).
+$GLOBALS['order'] = new FakeOrderForGuards();
+$GLOBALS['ledger_rows'] = array( 777 => array( array( 'id' => 'row-tile', 'status' => 'pending', 'method_id' => 'mollie_terminal_for_woocommerce', 'capture_mode' => 'server', 'provider_refs' => array( 'action' => 'tr_tile' ) ) ) );
+$start_refused( 'a pending, unadopted Pro leg refuses an old-panel start' );
+// Cash taken at the till for part of the total: the old panel would charge the full total again.
+$GLOBALS['order']->status = 'pos-partial';
+$GLOBALS['ledger_rows'] = array( 777 => array( array( 'id' => 'row-cash', 'status' => 'captured', 'method_id' => 'pos_cash', 'capture_mode' => 'manual' ) ) );
+$start_refused( 'a captured cash row on a part-paid order refuses an old-panel start' );
+// The old panel's own open attempt beside Pro's leg: start answers the refusal before asking Mollie
+// to resume it; poll goes on, so the attempt still settles.
+$GLOBALS['order'] = open_attempt( 'tr_mine', 10 );
+$GLOBALS['ledger_rows'] = array( 777 => array( array( 'id' => 'row-tile', 'status' => 'pending', 'method_id' => 'mollie_terminal_for_woocommerce', 'capture_mode' => 'server' ) ) );
+$start_refused( 'beside a live row a start is refused before any call to Mollie, even with an open attempt of its own' );
+$_POST = array( 'order_id' => '777', 'order_token' => AjaxHandler::order_token( 777 ) );
+try { ( new AjaxHandler() )->mtfwc_poll_payment(); expect( false, 'poll should answer' ); } catch ( JsonResponseForGuards $r ) { expect( 409 !== $r->status && array( 'https://api.mollie.com/v2/payments/tr_mine' ) === $GLOBALS['http'], 'poll of the old panel\'s own attempt goes on beside a live row' ); }
+$_POST = array( 'order_id' => '777', 'order_token' => AjaxHandler::order_token( 777 ), 'channel' => 'qr', 'qr_method' => 'ideal' );
+// A start resuming the old panel's own open attempt keeps working while no row is live.
+$GLOBALS['ledger_rows'] = array(); $GLOBALS['http'] = array();
+try { ( new AjaxHandler() )->mtfwc_start_payment(); expect( false, 'start should answer' ); } catch ( JsonResponseForGuards $r ) { expect( 409 !== $r->status && array( 'https://api.mollie.com/v2/payments/tr_mine' ) === $GLOBALS['http'], 'a start resumes the old panel\'s own attempt (here it asks Mollie about it)' ); }
+// Its own completed attempt mints a webview row; the paid order answers already_paid, not the refusal.
+$GLOBALS['order'] = new FakeOrderForGuards(); $GLOBALS['order']->paid = true;
+$GLOBALS['ledger_rows'] = array( 777 => array( array( 'id' => 'row-webview', 'status' => 'captured', 'method_id' => 'mollie_terminal_for_woocommerce', 'capture_mode' => 'webview' ) ) );
+try { ( new AjaxHandler() )->mtfwc_start_payment(); expect( false, 'start should answer' ); } catch ( JsonResponseForGuards $r ) { expect( 200 === $r->status && 'already_paid' === $r->data['status'], 'a paid order with its own webview row answers already_paid' ); }
+// A row that lands after the AJAX check passed (a tile start between the two) still stops the create:
+// start_attempt() reads the ledger again under the order lock and the panel gets the same 409.
+$GLOBALS['order'] = new FakeOrderForGuards();
+$GLOBALS['ledger_rows'] = array();
+$GLOBALS['late_row'] = array( 'id' => 'row-late', 'status' => 'pending', 'method_id' => 'mollie_terminal_for_woocommerce', 'capture_mode' => 'server' );
+$start_refused( 'a live row that appears after the AJAX check still stops the create' );
+expect( ! isset( $GLOBALS['late_row'] ), 'the late row was written after the AJAX check' );
+// A busy lock refuses the start before any call to Mollie.
+$GLOBALS['order'] = new FakeOrderForGuards(); $GLOBALS['ledger_rows'] = array(); $GLOBALS['http'] = array();
+Order_Lock::$refuse = array( 777 );
+try { ( new AjaxHandler() )->mtfwc_start_payment(); expect( false, 'start should answer' ); } catch ( JsonResponseForGuards $r ) { expect( 409 === $r->status && 'busy' === $r->data && array() === $GLOBALS['http'], 'a busy order lock refuses the start' ); }
+Order_Lock::$refuse = array();
+// The check under the lock reads a fresh copy of the order, not the one the AJAX check read.
+$GLOBALS['order'] = new FakeOrderForGuards(); $GLOBALS['fresh_order'] = new FreshOrderForGuards();
+$GLOBALS['ledger_rows'] = array( 778 => array( array( 'id' => 'row-fresh', 'status' => 'pending', 'method_id' => 'mollie_terminal_for_woocommerce', 'capture_mode' => 'server' ) ) );
+$start_refused( 'a live row seen only in the fresh copy of the order still stops the create' );
+unset( $GLOBALS['fresh_order'] );
+// The old panel itself: beside a live row it offers no Start, only the till's message; a panel
+// resuming its own attempt keeps the Cancel for it (poll and cancel go on).
+$GLOBALS['wp'] = (object) array( 'query_vars' => array( 'order-pay' => 777 ) );
+$render = static function (): string { ob_start(); ( new Gateway() )->payment_fields(); return ob_get_clean(); };
+$GLOBALS['order'] = new FakeOrderForGuards();
+$GLOBALS['ledger_rows'] = array( 777 => array( array( 'id' => 'row-tile', 'status' => 'pending', 'method_id' => 'mollie_terminal_for_woocommerce', 'capture_mode' => 'server' ) ) );
+$html = $render();
+expect( false === strpos( $html, 'mtfwc-primary-action' ) && false !== strpos( $html, '<p class="mtfwc-till-notice">' . $till . '</p>' ), 'beside a live row the old panel offers no Start, only the till\'s message' );
+$GLOBALS['order'] = open_attempt( 'tr_mine', 10 );
+$html = $render();
+expect( false !== strpos( $html, 'data-resume="1"' ) && false !== strpos( $html, 'data-mtfwc-mode="cancel"' ) && false === strpos( $html, 'mtfwc-till-notice' ), 'a panel resuming its own attempt beside a live row keeps its Cancel' );
+// A paid order shows no till notice.
+$GLOBALS['order'] = new FakeOrderForGuards(); $GLOBALS['order']->paid = true;
+$GLOBALS['ledger_rows'] = array( 777 => array( array( 'id' => 'row-cap', 'status' => 'captured', 'method_id' => 'pos_cash', 'capture_mode' => 'manual' ) ) );
+expect( false === strpos( $render(), 'mtfwc-till-notice' ), 'a paid order shows no till notice' );
+
+// The mirror: Pro's tile start (create_reader_action) beside the old panel's open attempt is refused
+// before Mollie is asked; a final attempt, an attempt Pro owns or no attempt lets it through.
+class ReaderClientForGuards extends MollieApiClient {
+	public $keys = array();
+	public function __construct() {}
+	public function create_payment( array $payload, array $include = array(), string $idempotency_key = '' ): array { $this->keys[] = $idempotency_key; return array( 'id' => 'tr_tile' ); }
+}
+$reader_client = new ReaderClientForGuards();
+$provider = new Mollie_Server_Provider( new Settings( array( 'mode' => 'live' ) ), $reader_client );
+$tile_row = array( 'id' => 'row-tile', 'order_id' => 777, 'amount' => '10.00', 'currency' => 'EUR' );
+$GLOBALS['ledger_rows'] = array( 777 => array( array( 'id' => 'row-1', 'status' => 'pending' ) ) ); // Pro's leg for tr_adopted.
+$attempt = static function ( string $payment_id, string $status ): FakeOrderForGuards {
+	$order = open_attempt( $payment_id, 10 ); $order->meta[ PaymentAttempt::META_CURRENT_PAYMENT_STATUS ] = $status; return $order;
+};
+foreach ( array( 'open', PaymentAttempt::STATUS_PAID_UNVERIFIED ) as $status ) {
+	$GLOBALS['order'] = $attempt( 'tr_mine', $status );
+	$result = $provider->create_reader_action( $tile_row, 'term_A' );
+	expect( is_wp_error( $result ) && 409 === $result->get_error_data()['status'] && 'An earlier payment for this sale is still open on the payment page. Finish or cancel it there first.' === $result->get_error_message() && array() === $reader_client->keys, "a tile start beside the old panel's $status attempt is refused before Mollie is asked" );
+}
+$tile_ok = array( 'ref' => 'tr_tile', 'expires_at' => null );
+$GLOBALS['order'] = $attempt( 'tr_mine', 'canceled' );
+expect( $tile_ok === $provider->create_reader_action( $tile_row, 'term_A' ), 'a final old-panel attempt does not refuse a tile start' );
+$GLOBALS['order'] = $attempt( 'tr_adopted', 'open' );
+expect( $tile_ok === $provider->create_reader_action( $tile_row, 'term_A' ), 'an attempt Pro owns does not refuse a tile start' );
+$GLOBALS['order'] = new FakeOrderForGuards();
+expect( $tile_ok === $provider->create_reader_action( $tile_row, 'term_A' ) && $tile_ok === $provider->create_reader_action( $tile_row, 'term_A' ), 'with no attempt the tile start, and a second create of the same row, go through' );
+expect( array_fill( 0, 4, 'row-tile' ) === $reader_client->keys, 'every create that went through used the row id as its Idempotency-Key' );
+$GLOBALS['ledger_rows'] = $kept_rows;
 $GLOBALS['options']['woocommerce_mollie_terminal_for_woocommerce_settings']['qr_methods'] = array();
 
 // A tab still on the old panel: poll, cancel and start are refused with a reload message.

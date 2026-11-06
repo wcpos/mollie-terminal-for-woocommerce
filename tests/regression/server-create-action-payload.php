@@ -6,6 +6,8 @@ require_once __DIR__ . '/../../includes/Utils/Money.php';
 require_once __DIR__ . '/../../includes/Services/MollieApiClient.php';
 require_once __DIR__ . '/../../includes/Services/MollieUnansweredException.php';
 require_once __DIR__ . '/../../includes/Services/TerminalService.php';
+require_once __DIR__ . '/../../includes/PaymentAttempt.php';
+require_once __DIR__ . '/../../includes/Legacy_Adoption.php';
 expect( file_exists( __DIR__ . '/../../includes/Server/Mollie_Server_Provider.php' ), 'server adapter is missing' );
 require_once __DIR__ . '/../../includes/Server/Mollie_Server_Provider.php';
 use WCPOS\WooCommercePOS\MollieTerminal\Server\Mollie_Server_Provider as Provider;
@@ -16,6 +18,7 @@ class PayloadOrder {
 	public function get_total() { return '99.99'; }
 	public function get_order_number() { return 'SHOP123'; }
 	public function get_checkout_order_received_url() { return 'https://shop.example/order/123'; }
+	public function get_meta() { return null; }
 }
 class PayloadClient extends MollieApiClient {
 	public $calls = array();

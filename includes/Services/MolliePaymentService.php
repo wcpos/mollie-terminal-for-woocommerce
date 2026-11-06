@@ -11,6 +11,9 @@ use WCPOS\WooCommercePOS\MollieTerminal\PaymentReconciler;
 use WCPOS\WooCommercePOS\MollieTerminal\Settings;
 use WCPOS\WooCommercePOS\MollieTerminal\Utils\Money;
 
+/** A start refused before anything was created (the till took the sale): the panel gets a 409, not a 500. */
+class StartRefusedException extends RuntimeException {}
+
 class MolliePaymentService {
 	private $client;
 	private $settings;
@@ -79,12 +82,31 @@ class MolliePaymentService {
 					return array_merge( $result, $reused );
 				}
 			}
-			$payload = $build_payload();
-			Logger::log( 'Creating Mollie payment.', array( 'order_id' => (int) $order->get_id(), 'terminal_id' => $terminal_id, 'method' => $method, 'amount' => $payload['amount']['value'] ?? '', 'currency' => $order->get_currency() ), 'info' );
-			$payment = $this->client->create_payment( $payload, $include );
-			PaymentAttempt::record_new( $order, $payment, $terminal_id, $this->settings->mode(), $method );
-			Logger::log( 'Mollie terminal payment created.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => PaymentAttempt::payment_id( $payment ), 'status' => PaymentAttempt::payment_status( $payment ), 'terminal_id' => $terminal_id ), 'success' );
-			return $this->with_qr_code( array( 'status' => 'created', 'payment' => $payment, 'method' => $method, 'channel' => PaymentAttempt::is_qr_method( $method ) ? 'qr' : 'terminal' ), $payment );
+			$create = function () use ( $order, $method, $terminal_id, $build_payload, $include ) {
+				$payload = $build_payload();
+				Logger::log( 'Creating Mollie payment.', array( 'order_id' => (int) $order->get_id(), 'terminal_id' => $terminal_id, 'method' => $method, 'amount' => $payload['amount']['value'] ?? '', 'currency' => $order->get_currency() ), 'info' );
+				$payment = $this->client->create_payment( $payload, $include );
+				PaymentAttempt::record_new( $order, $payment, $terminal_id, $this->settings->mode(), $method );
+				Logger::log( 'Mollie terminal payment created.', array( 'order_id' => (int) $order->get_id(), 'payment_id' => PaymentAttempt::payment_id( $payment ), 'status' => PaymentAttempt::payment_status( $payment ), 'terminal_id' => $terminal_id ), 'success' );
+				return $this->with_qr_code( array( 'status' => 'created', 'payment' => $payment, 'method' => $method, 'channel' => PaymentAttempt::is_qr_method( $method ) ? 'qr' : 'terminal' ), $payment );
+			};
+			// The till may have taken this sale since the AJAX check (Pro's leg, a tender): a new payment
+			// is created only while Free's ledger holds no live row, read fresh under Free's order lock,
+			// the lock Pro holds while it creates its own Mollie payment. Without Free's ledger there is
+			// no till to collide with. A busy lock refuses too: the cashier tries again.
+			if ( ! class_exists( '\WCPOS\WooCommercePOS\Payments\Contract\Ledger' ) ) {
+				return $create();
+			}
+			$result = Legacy_Adoption::with_order_lock( (int) $order->get_id(), function () use ( $order, $create ) {
+				if ( Legacy_Adoption::has_live_row( PaymentReconciler::reload_order( $order ) ) ) {
+					throw new StartRefusedException( Legacy_Adoption::till_message() );
+				}
+				return $create();
+			} );
+			if ( is_wp_error( $result ) ) {
+				throw new StartRefusedException( $result->get_error_message() );
+			}
+			return $result;
 		} );
 	}
 
