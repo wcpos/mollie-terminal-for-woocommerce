@@ -16,6 +16,11 @@ A refund the POS spreads over two Mollie payments of one order (two terminal pay
 
 Mollie Terminal requires WooCommerce POS Pro 2.0.0 or newer: the plugin registers nothing and shows an admin notice on older or missing Pro. Web checkout is removed: Mollie Terminal is no longer offered on the shop's checkout, and the "Enable Mollie Terminal for web checkout" setting is gone; the POS keypad tile and the POS order-pay page (the Legacy tab) are the only surfaces, and POS → Settings → Checkout is the only switch. The keypad's terminal tile: reader settings are mirrored from the existing gateway fields, tile payment creation sends an `Idempotency-Key` so retries within Mollie’s one-hour window reuse the same payment, and tips added on the terminal are recorded as an order fee.
 
+### Fixed
+
+- **A second charge could start beside an earlier payment that was paid but never recorded on the order.** When the order's earlier Mollie payment was paid but finishing the order failed, or the payment did not match the order, the keypad tile and the POS order-pay page offered a new charge for the full total. Both now refuse it: a paid payment that is being recorded asks the cashier to reload in a few minutes, and one that does not match the order asks them to check it in the Mollie dashboard before charging again.
+- **The stale-payment cleanup now reaches POS open and partially paid orders.** It looked only at pending and failed orders, so a paid payment on a POS order whose completion failed was never finished. The cleanup now finishes it like any other.
+
 ## 0.5.10 - 2026-10-15
 
 ### Fixed

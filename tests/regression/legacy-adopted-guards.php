@@ -258,19 +258,34 @@ $GLOBALS['ledger_rows'] = array( 777 => array( array( 'id' => 'row-1', 'status' 
 $attempt = static function ( string $payment_id, string $status ): FakeOrderForGuards {
 	$order = open_attempt( $payment_id, 10 ); $order->meta[ PaymentAttempt::META_CURRENT_PAYMENT_STATUS ] = $status; return $order;
 };
-foreach ( array( 'open', PaymentAttempt::STATUS_PAID_UNVERIFIED ) as $status ) {
+$GLOBALS['order'] = $attempt( 'tr_mine', 'open' );
+$result = $provider->create_reader_action( $tile_row, 'term_A' );
+expect( is_wp_error( $result ) && 'mtfwc_legacy_attempt_open' === $result->get_error_code() && 409 === $result->get_error_data()['status'] && 'An earlier payment for this sale is still open on the payment page. Finish or cancel it there first.' === $result->get_error_message() && array() === $reader_client->keys, "a tile start beside the old panel's open attempt is refused before Mollie is asked" );
+// An attempt Mollie reported paid on an unpaid order (its completion died, or it failed verification)
+// holds the tile too, with its own advice; `paid_unverified` is not final, so this check comes first.
+$paid_messages = array(
+	'paid' => 'An earlier Mollie payment for this sale was paid and is being recorded. Reload in a few minutes.',
+	PaymentAttempt::STATUS_PAID_UNVERIFIED => 'An earlier Mollie payment for this sale was paid but does not match the order. Check it in the Mollie dashboard before charging again.',
+);
+foreach ( $paid_messages as $status => $message ) {
 	$GLOBALS['order'] = $attempt( 'tr_mine', $status );
 	$result = $provider->create_reader_action( $tile_row, 'term_A' );
-	expect( is_wp_error( $result ) && 409 === $result->get_error_data()['status'] && 'An earlier payment for this sale is still open on the payment page. Finish or cancel it there first.' === $result->get_error_message() && array() === $reader_client->keys, "a tile start beside the old panel's $status attempt is refused before Mollie is asked" );
+	expect( is_wp_error( $result ) && 'mtfwc_legacy_attempt_paid' === $result->get_error_code() && 409 === $result->get_error_data()['status'] && $message === $result->get_error_message() && array() === $reader_client->keys, "a tile start beside a $status attempt on an unpaid order is held before Mollie is asked" );
 }
 $tile_ok = array( 'ref' => 'tr_tile', 'expires_at' => null );
-$GLOBALS['order'] = $attempt( 'tr_mine', 'canceled' );
-expect( $tile_ok === $provider->create_reader_action( $tile_row, 'term_A' ), 'a final old-panel attempt does not refuse a tile start' );
+foreach ( array( 'failed', 'canceled', 'expired' ) as $status ) {
+	$GLOBALS['order'] = $attempt( 'tr_mine', $status );
+	expect( $tile_ok === $provider->create_reader_action( $tile_row, 'term_A' ), "a final unpaid ($status) old-panel attempt does not refuse a tile start" );
+}
+$GLOBALS['order'] = $attempt( 'tr_mine', 'paid' ); $GLOBALS['order']->paid = true;
+expect( $tile_ok === $provider->create_reader_action( $tile_row, 'term_A' ), 'a paid attempt on a paid order holds nothing' );
+$GLOBALS['order'] = $attempt( 'tr_adopted', 'paid' );
+expect( $tile_ok === $provider->create_reader_action( $tile_row, 'term_A' ), 'a paid attempt Pro owns holds nothing' );
 $GLOBALS['order'] = $attempt( 'tr_adopted', 'open' );
 expect( $tile_ok === $provider->create_reader_action( $tile_row, 'term_A' ), 'an attempt Pro owns does not refuse a tile start' );
 $GLOBALS['order'] = new FakeOrderForGuards();
 expect( $tile_ok === $provider->create_reader_action( $tile_row, 'term_A' ) && $tile_ok === $provider->create_reader_action( $tile_row, 'term_A' ), 'with no attempt the tile start, and a second create of the same row, go through' );
-expect( array_fill( 0, 4, 'row-tile' ) === $reader_client->keys, 'every create that went through used the row id as its Idempotency-Key' );
+expect( array_fill( 0, 8, 'row-tile' ) === $reader_client->keys, 'every create that went through used the row id as its Idempotency-Key' );
 $GLOBALS['ledger_rows'] = $kept_rows;
 $GLOBALS['options']['woocommerce_mollie_terminal_for_woocommerce_settings']['qr_methods'] = array();
 

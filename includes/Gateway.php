@@ -256,6 +256,13 @@ class Gateway extends WC_Payment_Gateway {
 					echo '<p class="mtfwc-payment-help">' . esc_html( $waiting ? __( 'Another request is handling this order. Reload the page in a moment.', 'mollie-terminal-for-woocommerce' ) : __( 'A Mollie Terminal payment is still open on this order and could not be handed to WooCommerce POS. It ends on its own shortly (Mollie expires it, or the automatic cleanup cancels it); reload the page then, or check it in the Mollie dashboard.', 'mollie-terminal-for-woocommerce' ) ) . '</p>';
 					return;
 				}
+				// An old attempt Mollie reported paid on this unpaid order: no panel, so no second
+				// charge. The sweep completes a `paid` one; a `paid_unverified` one needs a person.
+				$paid_hold = Legacy_Adoption::paid_hold_message( $order );
+				if ( '' !== $paid_hold ) {
+					echo '<p class="mtfwc-payment-help">' . esc_html( $paid_hold ) . '</p>';
+					return;
+				}
 				wcpos_pro_order_pay_panel( $this, $order );
 			}
 			return;
