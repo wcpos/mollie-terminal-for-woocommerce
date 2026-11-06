@@ -135,8 +135,8 @@ composer run test
 ### Provider conformance
 
 Pro's provider conformance suite runs the real adapter over a scripted Mollie under wp-env, with
-a sibling checkout of WooCommerce POS Pro (`../woocommerce-pos-pro`, on its `next` branch during
-development). CI runs it on PHP 7.4 and 8.3 and compares the committed transcripts in
+a sibling checkout of WooCommerce POS Pro (`../woocommerce-pos-pro`, on its `main` branch).
+CI runs it on PHP 7.4 and 8.3 and compares the committed transcripts in
 `tests/conformance/transcripts`; a changed transcript is a re-certification, never a file to
 regenerate blindly.
 
