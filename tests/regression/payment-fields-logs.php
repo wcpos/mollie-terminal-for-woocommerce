@@ -129,7 +129,7 @@ $GLOBALS['mtfwc_test_order']->meta[ PaymentAttempt::META_CURRENT_PAYMENT_STATUS 
 $GLOBALS['adopted_map'] = array( 'tr_open_test' => 'row-1' );
 $GLOBALS['ledger_rows'] = array( 123 => array( array( 'id' => 'row-1', 'status' => 'pending' ) ) );
 $html = render_fields();
-expect( false !== strpos( $html, 'data-resume="0"' ) && false !== strpos( $html, 'data-mtfwc-mode="start"' ), 'a leg WooCommerce POS owns is not resumed by the old panel' );
+expect( false !== strpos( $html, 'data-resume="0"' ) && false === strpos( $html, 'mtfwc-primary-action' ) && false !== strpos( $html, 'This sale has a payment recorded at the till. Finish it at the till.' ), 'a leg WooCommerce POS owns is not resumed by the old panel, which offers no Start beside its live row' );
 $GLOBALS['ledger_rows'][123][0]['status'] = 'voided';
 $html = render_fields();
 expect( false !== strpos( $html, 'data-resume="1"' ), 'once Pro\'s leg has ended the old panel resumes the attempt' );
