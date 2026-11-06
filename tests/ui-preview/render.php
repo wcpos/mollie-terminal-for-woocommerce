@@ -72,6 +72,7 @@ $GLOBALS['wp'] = (object) array( 'query_vars' => array( 'order-pay' => 6915 ) );
 require_once __DIR__ . '/../../includes/Settings.php';
 require_once __DIR__ . '/../../includes/PaymentAttempt.php';
 require_once __DIR__ . '/../../includes/AjaxHandler.php';
+require_once __DIR__ . '/../../includes/Server/Registration.php';
 require_once __DIR__ . '/../../includes/Gateway.php';
 
 use WCPOS\WooCommercePOS\MollieTerminal\Gateway;

@@ -21,6 +21,7 @@ function wc_get_orders( $args ) {
 	global $captured_order_queries;
 	$captured_order_queries[] = $args;
 	$pool = '_mtfwc_current_payment_id' === ( $args['meta_key'] ?? '' ) ? $GLOBALS['sweeper_current_pool'] : $GLOBALS['sweeper_abandoned_pool'];
+	if ( is_array( $args['status'] ?? null ) ) { $pool = array_values( array_filter( $pool, function ( $order ) use ( $args ) { return in_array( $order->status, $args['status'], true ); } ) ); }
 	$offset = isset( $args['offset'] ) ? (int) $args['offset'] : ( max( 1, (int) ( $args['paged'] ?? 1 ) ) - 1 ) * $args['limit'];
 	$batch = array_slice( $pool, $offset, $args['limit'] );
 	$GLOBALS['sweeper_fetched'][ $args['meta_key'] ] = ( $GLOBALS['sweeper_fetched'][ $args['meta_key'] ] ?? 0 ) + count( $batch );
@@ -41,6 +42,7 @@ require_once __DIR__ . '/../../includes/PaymentReconciler.php';
 require_once __DIR__ . '/../../includes/Services/MollieApiClient.php';
 require_once __DIR__ . '/../../includes/Services/TerminalService.php';
 require_once __DIR__ . '/../../includes/Services/MolliePaymentService.php';
+require_once __DIR__ . '/../../includes/Legacy_Adoption.php';
 require_once __DIR__ . '/../../includes/PaymentSweeper.php';
 
 use WCPOS\WooCommercePOS\MollieTerminal\PaymentAttempt;
@@ -53,6 +55,7 @@ class FakeOrderForSweeper {
 	public $notes = array();
 	public $saves = 0;
 	public $id = 4242;
+	public $status = 'pending';
 	public function is_paid() { return $this->paid; }
 	public function get_id() { return $this->id; }
 	public $payment_method = '';
@@ -182,6 +185,20 @@ expect(
 	array( PaymentAttempt::META_CURRENT_PAYMENT_ID, PaymentAttempt::META_ABANDONED_PAYMENT_IDS ) === array_column( $captured_order_queries, 'meta_key' ),
 	'the sweep must query the current-attempt key and then the abandoned-payments key'
 );
+
+expect( array( 'pending', 'failed', 'pos-open', 'pos-partial' ) === $captured_order_queries[0]['status'], 'the current-attempt query asks for every payable status, POS open and partially paid included' );
+
+// A paid attempt whose completion died on a POS open or partially paid order is recovered too:
+// under Pro's panel nothing else ever completes it.
+$GLOBALS['sweeper_current_pool'] = array();
+foreach ( array( 6100 => 'pos-open', 6101 => 'pos-partial' ) as $id => $order_status ) {
+	$pos_order = make_sweeper_order( 'paid', 20 * MINUTE_IN_SECONDS );
+	$pos_order->id = $id; $pos_order->status = $order_status;
+	$GLOBALS['sweeper_current_pool'][] = $pos_order;
+}
+$service = new CountingCancelService();
+( new PaymentSweeper( $service ) )->sweep();
+expect( array( array( 6100, 'stale_sweep' ), array( 6101, 'stale_sweep' ) ) === $service->polled, 'a paid attempt on a pos-open and on a pos-partial order reaches poll_order (recovered: ' . json_encode( $service->polled ) . ')' );
 
 // #31 review: orders whose attempt the sweep skips (paid_unverified, canceled)
 // keep their meta and stay the oldest matches. A full batch of them must not hide

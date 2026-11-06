@@ -4,6 +4,7 @@ namespace WCPOS\WooCommercePOS\MollieTerminal;
 use Exception;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieApiClient;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MolliePaymentService;
+use WCPOS\WooCommercePOS\MollieTerminal\Services\StartRefusedException;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\TerminalService;
 
 class AjaxHandler {
@@ -138,6 +139,22 @@ class AjaxHandler {
 				Logger::log( 'Mollie Terminal AJAX request used invalid order.', array( 'operation' => $operation, 'order_id' => $order_id ), 'error' );
 				wp_send_json_error( __( 'Invalid order.', 'mollie-terminal-for-woocommerce' ), 404 );
 			}
+			// A tab still showing the old panel after the upgrade: the attempt is Pro's leg now, and
+			// the old panel must neither poll, cancel nor replace it. While the page runs Pro's panel
+			// no old-panel start is accepted at all, adopted attempt or none: a second, untracked
+			// Mollie payment beside Pro's leg would be a double charge. Poll and cancel of an attempt
+			// Pro did not adopt (a QR attempt in flight when the methods were switched off) go on.
+			if ( Legacy_Adoption::owns_order( $order ) || ( 'start_payment' === $operation && $this->settings()->uses_pro_panel() ) ) {
+				wp_send_json_error( __( 'This payment is now handled by WooCommerce POS. Reload the page.', 'mollie-terminal-for-woocommerce' ), 409 );
+			}
+			// Under the QR carve-out too, no old-panel start beside a live row in Free's ledger, of any
+			// method: the old panel charges the order total, so a second payment beside Pro's leg is a
+			// double charge, and beside a till tender an overcharge. start_attempt() checks again under
+			// the order lock. A paid order goes on to answer already_paid: its own completed attempt
+			// has a row too.
+			if ( 'start_payment' === $operation && Legacy_Adoption::has_live_row( $order ) && ! $order->is_paid() ) {
+				wp_send_json_error( Legacy_Adoption::till_message(), 409 );
+			}
 			$result = $callback( $order );
 			if ( is_array( $result ) ) {
 				// The order is already reconciled and paid, so re-submitting the
@@ -147,6 +164,9 @@ class AjaxHandler {
 			}
 			Logger::log( 'Mollie Terminal AJAX request completed.', array( 'operation' => $operation, 'order_id' => $order_id, 'status' => is_array( $result ) ? ( $result['status'] ?? '' ) : '' ), 'success' );
 			wp_send_json_success( $result );
+		} catch ( StartRefusedException $e ) {
+			Logger::log( 'Mollie Terminal start refused: ' . $e->getMessage(), array( 'operation' => $operation ), 'info' );
+			wp_send_json_error( $e->getMessage(), 409 );
 		} catch ( Exception $e ) {
 			Logger::log( 'Mollie Terminal AJAX failed: ' . $e->getMessage(), array( 'operation' => $operation ), 'error' );
 			wp_send_json_error( $e->getMessage(), 500 );
@@ -160,13 +180,12 @@ class AjaxHandler {
 	}
 
 	/**
-	 * A gateway switched off everywhere must stay off: the checkout actions
-	 * stay registered while the plugin is active, so starting a payment and
-	 * listing terminals check the switches themselves. There are two: the
-	 * WooCommerce → Payments checkbox (online store) and POS → Settings →
-	 * Checkout (WooCommerce POS), and either one counts — POS merchants
-	 * routinely leave the WooCommerce one off (the 0.5.1 guard only looked at
-	 * that one and locked every such POS out of taking payments).
+	 * A gateway switched off must stay off: the checkout actions stay registered
+	 * while the plugin is active, so starting a payment and listing terminals
+	 * check the switch themselves. The switch is POS → Settings → Checkout; the
+	 * WooCommerce → Payments checkbox governed the shop's checkout, which no
+	 * longer offers the gateway (the 0.5.1 guard looked only at that one and
+	 * locked every POS-only shop out of taking payments).
 	 * Poll and cancel are deliberately not gated (nor is the webhook): a
 	 * payment already in flight must still settle, and the cashier must keep
 	 * the ability to cancel it, even if the gateway was switched off meanwhile.

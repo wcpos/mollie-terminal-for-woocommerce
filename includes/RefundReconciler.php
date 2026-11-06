@@ -3,6 +3,9 @@ namespace WCPOS\WooCommercePOS\MollieTerminal;
 
 use RuntimeException;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieApiClient;
+use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieRefundPostUnansweredException;
+use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieRefundRefusedException;
+use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieUnansweredException;
 use WCPOS\WooCommercePOS\MollieTerminal\Utils\Money;
 
 class RefundReconciler {
@@ -10,32 +13,256 @@ class RefundReconciler {
 	public const META_MOLLIE_REFUND_ID = '_mtfwc_mollie_refund_id';
 	public const META_STATUS = '_mtfwc_refund_status';
 	public const META_AMOUNT = '_mtfwc_refund_amount';
+	/**
+	 * Set on a record once any of its Mollie facts is stored per payment. One WooCommerce refund
+	 * record can span several Mollie payments (the POS allocates one refund across its payment
+	 * rows), so the refund id, status, amount and attempt id are kept per payment under
+	 * `<key>:<payment id>`; a record without this marker predates that and its plain keys belong
+	 * to its one payment.
+	 */
+	public const META_LEGS = '_mtfwc_refund_legs';
+	/** Cron hook that asks Mollie again about a refund whose POST went unanswered. */
+	public const REASK_HOOK = 'mtfwc_reask_refund';
+	/** Seconds before the first re-ask, and between re-asks; Mollie lists a refund it made at once, so this is for its outage. */
+	public const REASK_DELAY = 120;
+	/** Re-asks before giving up with an order note for staff. */
+	public const REASK_LIMIT = 5;
 	private $client;
 	public function __construct( MollieApiClient $client ) { $this->client = $client; }
 
-	public function refund( $order, $woo_refund, string $amount, string $reason = '' ): array {
-		return PaymentLock::with_lock( (int) $order->get_id(), 'refund', function () use ( $order, $woo_refund, $amount, $reason ) {
-			$existing = $woo_refund->get_meta( self::META_MOLLIE_REFUND_ID );
-			if ( $existing ) { return array( 'status' => 'already_refunded', 'refund_id' => $existing ); }
-			$payment_id = (string) $order->get_transaction_id();
-			if ( '' === $payment_id ) { $current = PaymentAttempt::current( $order ); $payment_id = $current['payment_id'] ?? ''; }
+	public function refund( $order, $woo_refund, string $amount, string $reason = '', ?string $payment_id = null ): array {
+		return PaymentLock::with_lock( (int) $order->get_id(), 'refund', function () use ( $order, $woo_refund, $amount, $reason, $payment_id ) {
+			if ( null === $payment_id ) {
+				$payment_id = (string) $order->get_transaction_id();
+				if ( '' === $payment_id ) { $current = PaymentAttempt::current( $order ); $payment_id = $current['payment_id'] ?? ''; }
+			}
+			$existing = self::leg( $woo_refund, self::META_MOLLIE_REFUND_ID, $payment_id );
+			if ( '' !== $existing ) { return $this->refresh_refund( $woo_refund, $existing, $payment_id ); }
 			if ( '' === $payment_id ) { throw new RuntimeException( 'No Mollie payment found for refund.' ); }
 			$payment = $this->client->get_payment( $payment_id );
 			$refunds = $this->refund_items( $this->client->list_refunds( $payment_id ) );
-			$attempt_id = $woo_refund->get_meta( self::META_ATTEMPT_ID );
-			if ( ! $attempt_id ) { $attempt_id = function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'refund_', true ); $woo_refund->update_meta_data( self::META_ATTEMPT_ID, $attempt_id ); }
+			$attempt_id = self::leg( $woo_refund, self::META_ATTEMPT_ID, $payment_id );
+			if ( '' === $attempt_id ) {
+				// Saved before the POST: a response Mollie loses after creating the refund is retried
+				// under this same id, and the retry finds that refund by its metadata instead of
+				// creating a second one. An unsaved id would be a new id on a fresh read. Per payment:
+				// it is the Idempotency-Key, and two legs of one record are two POSTs.
+				$attempt_id = function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'refund_', true );
+				self::set_leg( $woo_refund, self::META_ATTEMPT_ID, $payment_id, $attempt_id );
+				$woo_refund->save();
+			}
 			foreach ( $refunds as $refund ) {
 				$meta = $refund['metadata'] ?? array();
 				if ( (string) ( $meta['order_id'] ?? '' ) === (string) $order->get_id() && (string) ( $meta['woo_refund_id'] ?? '' ) === (string) $woo_refund->get_id() && (string) ( $meta['refund_attempt_id'] ?? '' ) === (string) $attempt_id ) {
-					return $this->store_refund( $woo_refund, $refund, $amount );
+					return $this->store_refund( $woo_refund, $refund, $amount, $payment_id );
 				}
 			}
 			$remaining = $this->remaining_refundable( $payment, $refunds, (string) $order->get_currency() );
 			if ( ! Money::equals( Money::subtract( $remaining, Money::to_mollie_value( $amount, $order->get_currency() ), $order->get_currency() ), Money::subtract( $remaining, Money::to_mollie_value( $amount, $order->get_currency() ), $order->get_currency() ), $order->get_currency() ) ) { /* normalization only */ }
 			$payload = array( 'amount' => array( 'currency' => $order->get_currency(), 'value' => Money::to_mollie_value( $amount, $order->get_currency() ) ), 'description' => $reason, 'metadata' => array( 'order_id' => (string) $order->get_id(), 'woo_refund_id' => (string) $woo_refund->get_id(), 'refund_attempt_id' => (string) $attempt_id ) );
-			$refund = $this->client->create_refund( $payment_id, $payload );
-			return $this->store_refund( $woo_refund, $refund, $amount );
+			try {
+				// The attempt id is the Idempotency-Key too: a POST Mollie received but did not answer
+				// is replayed under it and Mollie hands back the refund it made.
+				$refund = $this->client->create_refund( $payment_id, $payload, (string) $attempt_id );
+			} catch ( MollieUnansweredException $e ) {
+				// Only the POST itself: an unanswered read before it created nothing and stays an
+				// error. The refund may exist now; the caller keeps the record and asks again.
+				throw new MollieRefundPostUnansweredException( $e->getMessage(), (string) $attempt_id, (string) $payment_id );
+			} catch ( RuntimeException $e ) {
+				// Mollie answered the POST with a refusal: no refund was made. Named apart from a
+				// failed read, which proves nothing about a refund an earlier POST may have made.
+				throw new MollieRefundRefusedException( $e->getMessage() );
+			}
+			return $this->store_refund( $woo_refund, $refund, $amount, $payment_id );
 		} );
+	}
+
+	/**
+	 * A Mollie fact of this record for one payment: the per-payment key, or, on a record from
+	 * before legs were kept apart, the plain key (such a record has one payment).
+	 *
+	 * @param \WC_Order_Refund $woo_refund Refund record.
+	 * @param string           $key        Plain meta key.
+	 * @param string           $payment_id Mollie payment.
+	 */
+	public static function leg( $woo_refund, string $key, string $payment_id ): string {
+		$value = (string) $woo_refund->get_meta( $key . ':' . $payment_id );
+		if ( '' !== $value || '1' === (string) $woo_refund->get_meta( self::META_LEGS ) ) { return $value; }
+		return (string) $woo_refund->get_meta( $key );
+	}
+
+	/**
+	 * Store a Mollie fact of this record for one payment. The plain refund id is written too: the
+	 * old panel's refund path reads its presence as "this record already has a Mollie refund".
+	 *
+	 * @param \WC_Order_Refund $woo_refund Refund record.
+	 * @param string           $key        Plain meta key.
+	 * @param string           $payment_id Mollie payment.
+	 * @param string           $value      Value.
+	 */
+	private static function set_leg( $woo_refund, string $key, string $payment_id, string $value ): void {
+		if ( '1' !== (string) $woo_refund->get_meta( self::META_LEGS ) ) {
+			// The first per-payment write on a record from before legs were kept apart: its plain
+			// facts belong to this payment (it had one), so they move under it before the marker
+			// stops them being read. Without this the next replay would see no refund id and no
+			// attempt id, post again under a new key, and refund twice.
+			foreach ( array( self::META_MOLLIE_REFUND_ID, self::META_STATUS, self::META_AMOUNT, self::META_ATTEMPT_ID ) as $plain ) {
+				$legacy = (string) $woo_refund->get_meta( $plain );
+				if ( '' !== $legacy ) { $woo_refund->update_meta_data( $plain . ':' . $payment_id, $legacy ); }
+			}
+		}
+		$woo_refund->update_meta_data( $key . ':' . $payment_id, $value );
+		$woo_refund->update_meta_data( self::META_LEGS, '1' );
+		if ( self::META_MOLLIE_REFUND_ID === $key ) { $woo_refund->update_meta_data( $key, $value ); }
+	}
+
+	/**
+	 * The first unanswered POST for a refund record: say so on the order and schedule the first ask.
+	 *
+	 * @param \WC_Order $order      Parent order.
+	 * @param int       $refund_id  WooCommerce refund record.
+	 * @param string    $payment_id Mollie payment.
+	 * @param string    $amount     Refund amount, major units.
+	 */
+	public static function unanswered_post( $order, int $refund_id, string $payment_id, string $amount ): void {
+		$order->add_order_note( sprintf( 'Mollie Terminal: the refund of %s was sent but Mollie did not answer; it is unconfirmed and will be checked again.', $amount ) );
+		$order->save();
+		self::schedule_reask( $refund_id, $payment_id, $amount, 1 );
+	}
+
+	/**
+	 * Schedule the next ask about a refund whose POST went unanswered.
+	 *
+	 * @param int    $refund_id  WooCommerce refund record.
+	 * @param string $payment_id Mollie payment.
+	 * @param string $amount     Refund amount, major units.
+	 * @param int    $try        Which ask this is.
+	 */
+	public static function schedule_reask( int $refund_id, string $payment_id, string $amount, int $try ): void {
+		if ( ! function_exists( 'wp_schedule_single_event' ) ) { return; }
+		$args = array( $refund_id, $payment_id, $amount, $try );
+		if ( function_exists( 'wp_next_scheduled' ) && wp_next_scheduled( self::REASK_HOOK, $args ) ) { return; }
+		wp_schedule_single_event( time() + self::REASK_DELAY, self::REASK_HOOK, $args );
+	}
+
+	/**
+	 * The scheduled ask: find the refund Mollie made under the attempt id (or make it under that
+	 * same id), record it on the refund record, and tell staff on the order. Mollie still not
+	 * answering waits another step; after the last step staff are asked to check the dashboard.
+	 *
+	 * @param int    $refund_id  WooCommerce refund record.
+	 * @param string $payment_id Mollie payment.
+	 * @param string $amount     Refund amount, major units.
+	 * @param int    $try        Which ask this is.
+	 * @param MollieApiClient|null $client The client to ask with; the configured one by default.
+	 */
+	public static function reask( $refund_id, $payment_id, $amount, $try = 1, $client = null ): void {
+		$refund = wc_get_order( (int) $refund_id );
+		$order  = $refund ? wc_get_order( (int) $refund->get_parent_id() ) : false;
+		if ( ! $refund || ! $order ) { return; }
+		$client = $client ?: new \WCPOS\WooCommercePOS\MollieTerminal\Services\MollieApiClient( ( new Settings() )->api_key() );
+		try {
+			$result = ( new self( $client ) )->refund( $order, $refund, (string) $amount, (string) $refund->get_reason(), (string) $payment_id );
+			if ( in_array( (string) $result['mollie_status'], array( 'failed', 'canceled' ), true ) ) {
+				$order->add_order_note( sprintf( 'Mollie Terminal: Mollie reports the refund of %s as %s (refund %s). The WooCommerce refund record stands; check the Mollie dashboard before refunding again.', $amount, $result['mollie_status'], $result['refund_id'] ) );
+			} else {
+				$order->add_order_note( sprintf( 'Mollie Terminal: the refund of %s is confirmed with Mollie (refund %s, %s).', $amount, $result['refund_id'], $result['mollie_status'] ) );
+			}
+			$order->save();
+		} catch ( PaymentLockHeldException $e ) {
+			// Another operation holds the order: not an answer from Mollie, so this try is not spent.
+			self::schedule_reask( (int) $refund_id, (string) $payment_id, (string) $amount, (int) $try );
+		} catch ( MollieRefundPostUnansweredException | MollieUnansweredException | PaymentLockErrorException $e ) {
+			// Mollie silent, or the database refusing the lock: a try is spent, so a persistent fault
+			// ends with the dashboard note rather than a reschedule forever.
+			if ( (int) $try >= self::REASK_LIMIT ) {
+				Logger::log( 'Mollie Terminal gave up confirming a refund.', array( 'refund_id' => (int) $refund_id, 'payment_id' => $payment_id ), 'error' );
+				$order->add_order_note( sprintf( 'Mollie Terminal: the refund of %s could not be confirmed with Mollie. Check it in the Mollie dashboard before refunding again.', $amount ) );
+				$order->save();
+				return;
+			}
+			self::schedule_reask( (int) $refund_id, (string) $payment_id, (string) $amount, (int) $try + 1 );
+		} catch ( MollieRefundRefusedException $e ) {
+			// Mollie answered the POST, and refused: no refund was made. The record stands for staff.
+			Logger::log( 'Mollie refused a refund on the re-ask: ' . $e->getMessage(), array( 'refund_id' => (int) $refund_id, 'payment_id' => $payment_id ), 'error' );
+			$order->add_order_note( sprintf( 'Mollie Terminal: Mollie refused the refund of %s (%s); no refund was made. The WooCommerce refund record stands; refund it in the Mollie dashboard or delete the record.', $amount, $e->getMessage() ) );
+			$order->save();
+		} catch ( \Throwable $e ) {
+			// A failed read (a key Mollie rejects, a payment it cannot show), an amount that no longer
+			// fits, or anything else: proves nothing about a refund the first POST may have made.
+			// Unconfirmed, never "no refund was made"; staff check before refunding again.
+			Logger::log( 'Mollie Terminal could not confirm a refund: ' . $e->getMessage(), array( 'refund_id' => (int) $refund_id, 'payment_id' => $payment_id ), 'error' );
+			$order->add_order_note( sprintf( 'Mollie Terminal: the refund of %s could not be confirmed with Mollie (%s). Check it in the Mollie dashboard before refunding again.', $amount, $e->getMessage() ) );
+			$order->save();
+		}
+	}
+
+	/**
+	 * Read back a refund without ever making one: Pro's refund sweep asks here about an allocation
+	 * Mollie answered as queued or pending. By reference when the record has one; otherwise by the
+	 * metadata the POST carried (the record, its order and its attempt id), which is how a refund
+	 * made by a POST Mollie never answered is found. Nothing is listed yet: null, and the record
+	 * stands as it is (the scheduled ask, not the sweep, is what makes a missing refund).
+	 *
+	 * @param \WC_Order_Refund $woo_refund WooCommerce refund record.
+	 * @param string           $payment_id Mollie payment.
+	 * @param string           $refund_id  Mollie refund the caller knows, or ''.
+	 * @return array|null refund_id and mollie_status, or null when Mollie lists no such refund.
+	 */
+	public function read( $woo_refund, string $payment_id, string $refund_id = '' ): ?array {
+		if ( '' === $payment_id ) { throw new RuntimeException( 'No Mollie payment found for refund.' ); }
+		// The record's own reference for THIS payment wins: the caller's may be stale, and a sibling
+		// leg's reference (another payment of the same record) is never tried against this one.
+		$stored = self::leg( $woo_refund, self::META_MOLLIE_REFUND_ID, $payment_id );
+		$refund_id = '' !== $stored ? $stored : $refund_id;
+		if ( '' !== $refund_id ) {
+			$remote = $this->client->get_refund( $payment_id, $refund_id );
+			$status = (string) ( $remote['status'] ?? self::leg( $woo_refund, self::META_STATUS, $payment_id ) );
+			self::set_leg( $woo_refund, self::META_MOLLIE_REFUND_ID, $payment_id, $refund_id );
+			self::set_leg( $woo_refund, self::META_STATUS, $payment_id, $status );
+			$woo_refund->save();
+			return array( 'refund_id' => $refund_id, 'mollie_status' => $status );
+		}
+		$attempt_id = self::leg( $woo_refund, self::META_ATTEMPT_ID, $payment_id );
+		foreach ( $this->refund_items( $this->client->list_refunds( $payment_id ) ) as $refund ) {
+			$meta = $refund['metadata'] ?? array();
+			if ( (string) ( $meta['order_id'] ?? '' ) !== (string) $woo_refund->get_parent_id() || (string) ( $meta['woo_refund_id'] ?? '' ) !== (string) $woo_refund->get_id() ) { continue; }
+			// The attempt id is the POST's Idempotency-Key; a record with none predates it and the
+			// record id alone names the refund.
+			if ( '' !== $attempt_id && (string) ( $meta['refund_attempt_id'] ?? '' ) !== $attempt_id ) { continue; }
+			$stored = $this->store_refund( $woo_refund, $refund, '', $payment_id );
+			return array( 'refund_id' => $stored['refund_id'], 'mollie_status' => $stored['mollie_status'] );
+		}
+		return null;
+	}
+
+	/**
+	 * Mollie's refund statuses in Pro's three words. Anything unknown is still pending: never a
+	 * success or a failure Mollie did not report.
+	 *
+	 * @param string $mollie_status Mollie refund status.
+	 */
+	public static function pro_status( string $mollie_status ): string {
+		$statuses = array( 'refunded' => 'succeeded', 'queued' => 'pending', 'pending' => 'pending', 'processing' => 'pending', 'failed' => 'failed', 'canceled' => 'failed' );
+		return $statuses[ $mollie_status ] ?? 'pending';
+	}
+
+	/**
+	 * A refund Mollie first reported as queued/pending/processing settles later and
+	 * nothing else re-reads it (payment webhooks carry the payment, not its refunds),
+	 * so a replay refreshes the stored status; Mollie being unreachable keeps the last one.
+	 */
+	private function refresh_refund( $woo_refund, string $refund_id, string $payment_id ): array {
+		$status = self::leg( $woo_refund, self::META_STATUS, $payment_id );
+		if ( '' !== $payment_id ) {
+			try {
+				$remote = $this->client->get_refund( $payment_id, $refund_id );
+				$status = (string) ( $remote['status'] ?? $status );
+				self::set_leg( $woo_refund, self::META_STATUS, $payment_id, $status );
+				$woo_refund->save();
+			} catch ( RuntimeException $e ) { /* keep the stored status */ }
+		}
+		return array( 'status' => 'already_refunded', 'refund_id' => $refund_id, 'mollie_status' => $status );
 	}
 
 	private function refund_items( array $response ): array { return $response['_embedded']['refunds'] ?? $response['items'] ?? $response; }
@@ -44,11 +271,11 @@ class RefundReconciler {
 		foreach ( $refunds as $refund ) { $remaining = Money::subtract( $remaining, (string) ( $refund['amount']['value'] ?? '0.00' ), $currency ); }
 		return $remaining;
 	}
-	private function store_refund( $woo_refund, array $refund, string $amount ): array {
-		$woo_refund->update_meta_data( self::META_MOLLIE_REFUND_ID, (string) ( $refund['id'] ?? '' ) );
-		$woo_refund->update_meta_data( self::META_STATUS, (string) ( $refund['status'] ?? 'queued' ) );
-		$woo_refund->update_meta_data( self::META_AMOUNT, $amount );
+	private function store_refund( $woo_refund, array $refund, string $amount, string $payment_id ): array {
+		self::set_leg( $woo_refund, self::META_MOLLIE_REFUND_ID, $payment_id, (string) ( $refund['id'] ?? '' ) );
+		self::set_leg( $woo_refund, self::META_STATUS, $payment_id, (string) ( $refund['status'] ?? 'queued' ) );
+		if ( '' !== $amount ) { self::set_leg( $woo_refund, self::META_AMOUNT, $payment_id, $amount ); }
 		$woo_refund->save();
-		return array( 'status' => 'refunded', 'refund_id' => (string) ( $refund['id'] ?? '' ) );
+		return array( 'status' => 'refunded', 'refund_id' => (string) ( $refund['id'] ?? '' ), 'mollie_status' => (string) ( $refund['status'] ?? 'queued' ) );
 	}
 }

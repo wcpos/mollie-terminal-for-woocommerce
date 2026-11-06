@@ -303,7 +303,26 @@
 		return 'string' === typeof data && data ? data : t('requestFailed', 'Mollie Terminal request failed. Copy logs for support.');
 	}
 
+	// The attempt is WooCommerce POS's now (adopted on upgrade, or the page runs Pro's panel):
+	// this panel can neither poll, cancel nor start it; the cashier reloads into Pro's panel.
+	function isHandledByPos(result) {
+		return !!(result && 409 === result.status);
+	}
+
+	function showHandledByPos(root, result) {
+		stopAutoPoll(root);
+		hideQr(root);
+		setBusy(root, false);
+		setActionButtonsDisabled(root, true);
+		var data = result && result.json ? result.json.data : null;
+		setStatus(root, 'string' === typeof data && data ? data : t('handledByPos', 'This payment is now handled by WooCommerce POS. Reload the page.'), 'error');
+	}
+
 	function keepLiveAfterFailedCancel(root, result) {
+		if (isHandledByPos(result)) {
+			showHandledByPos(root, result);
+			return;
+		}
 		startAutoPoll(root);
 		setStatus(root, cancelFailureMessage(result), 'error');
 		// The cashier may have picked another method while the cancel was in
@@ -558,6 +577,10 @@
 			if (!root.mtfwcPoll || root.mtfwcPoll.id !== session) {
 				return;
 			}
+			if (isHandledByPos(result)) {
+				showHandledByPos(root, result);
+				return;
+			}
 			var status = resultStatus(result);
 			var qr = resultQrCode(result);
 			// Mollie only returns the QR while the payment is "open". Once the
@@ -682,6 +705,10 @@
 		var fields = 'qr' === channel ? { channel: 'qr', qr_method: qrMethod } : { terminal_id: terminalId };
 		postAction(root, 'mtfwc_start_payment', fields).then(function (result) {
 			root.setAttribute('data-mtfwc-request-pending', 'false');
+			if (isHandledByPos(result)) {
+				showHandledByPos(root, result);
+				return;
+			}
 			if (!result || !result.ok || !result.json || !result.json.success) {
 				var errorMessage = 'qr' === channel && result && result.json && 'string' === typeof result.json.data
 					? result.json.data

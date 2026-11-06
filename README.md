@@ -1,10 +1,12 @@
 # Mollie Terminal for WooCommerce
 
-Mollie Terminal support for WooCommerce and WooCommerce POS.
+Mollie Terminal support for WooCommerce POS. Requires WooCommerce POS Pro 2.0.0 or newer; the
+gateway is offered on the POS only (the keypad tile and the POS order-pay page), never as a
+payment method on the shop's checkout.
 
 This plugin starts Mollie `pointofsale` payments for in-person checkout and treats Mollie as the source of truth for payment and refund state. Local WooCommerce order meta is only a cache.
 
-## Safety model
+## Legacy safety model
 
 - Per-order locks prevent duplicate payment/refund mutations.
 - Every webhook, poll, cancel, retry, and refund path fetches authoritative Mollie state before changing an order.
@@ -15,8 +17,8 @@ This plugin starts Mollie `pointofsale` payments for in-person checkout and trea
 
 ## Setup
 
-1. Install and activate WooCommerce.
-2. Activate this plugin.
+1. Install and activate WooCommerce and WooCommerce POS Pro 2.0.0 or newer.
+2. Activate this plugin. Without a supported Pro, it registers nothing and shows an admin notice.
 3. Go to WooCommerce → Settings → Payments → Mollie Terminal.
 4. Choose an **API key source**: enter the Mollie API key matching the selected
    mode here, or
@@ -42,9 +44,22 @@ This plugin starts Mollie `pointofsale` payments for in-person checkout and trea
 You do not need to enter a Mollie **Profile ID**: it is not required for
 `pointofsale` payments, and terminals are listed across the whole account.
 
-## Checkout flow
+## WooCommerce POS 2.0 checkout
 
-At checkout the cashier optionally picks a terminal from the dropdown (defaults
+Enable Mollie Terminal under POS → Settings → Checkout to use its terminal tile; that switch is the
+only one (the old WooCommerce → Payments "enable for web checkout" setting is gone).
+Cashiers send the selected payment amount to a reader from the tile; terminal tips are recorded as an order fee.
+Manage **Default terminal**, **Enabled terminals** and **Lock terminal selection** under WooCommerce → Settings → Payments → Mollie Terminal.
+These fields are mirrored into POS reader settings when saved; initial migration preserves existing POS reader choices.
+The **Legacy** tab (the POS order-pay page) runs through the POS's shared order-pay panel, so a
+Legacy-tab payment is tracked like a keypad payment, unless an on-screen QR method is enabled
+(next section): then the plugin's own panel stays, because a QR code has no home in the shared
+panel yet. Attempts the old panel left mid-flight when the plugin is updated are folded into the
+POS once, so they complete or cancel through the POS.
+
+## The plugin's own order-pay panel (QR carve-out)
+
+With a QR method enabled, at checkout the cashier optionally picks a terminal from the dropdown (defaults
 to the configured one) and clicks **Start Terminal Payment**. The plugin then:
 
 - shows `Sending to terminal…` → `Waiting for terminal…`,
@@ -65,7 +80,8 @@ terminal payment is stopped and canceled.
 Merchants in the Netherlands and Belgium can also let customers pay by scanning
 an on-screen iDEAL or Bancontact QR code with their banking app. Enable the
 methods you accept under **WooCommerce → Settings → Payments → Mollie Terminal
-→ QR code payments**. The cashier can then switch the checkout panel from
+→ QR code payments**. While any is enabled the Legacy tab keeps the plugin's own
+panel (the shared POS panel cannot show a QR code yet): the cashier can switch it from
 **Terminal** to **QR code**, choose a method when both are enabled, and click
 **Show QR code**.
 
@@ -76,7 +92,7 @@ Mollie test API key; Bancontact QR requires live mode. Bancontact caps QR
 payments at €1,500.00 per transaction (a scheme limit, not a plugin one); for
 larger totals use the terminal.
 
-## Stale payment cleanup
+## Stale payment cleanup (the plugin's own panel)
 
 A Mollie `pointofsale` payment can stay "open" on the Mollie side if the flow
 is abandoned. The plugin actively cancels open payments when:
@@ -114,6 +130,28 @@ selected. iDEAL QR payments do work in test mode.
 ```sh
 composer run lint
 composer run test
+```
+
+### Provider conformance
+
+Pro's provider conformance suite runs the real adapter over a scripted Mollie under wp-env, with
+a sibling checkout of WooCommerce POS Pro (`../woocommerce-pos-pro`, on its `main` branch).
+CI runs it on PHP 7.4 and 8.3 and compares the committed transcripts in
+`tests/conformance/transcripts`; a changed transcript is a re-certification, never a file to
+regenerate blindly.
+
+```sh
+composer install
+composer install --working-dir=../woocommerce-pos-pro
+npx wp-env start
+npx wp-env run --env-cwd="wp-content/plugins/$(basename "$PWD")" tests-cli -- vendor/bin/phpunit -c phpunit.conformance.xml.dist
+```
+
+Recording missing transcripts is an explicit opt-in that must reach the PHPUnit process inside
+wp-env (it forwards no host variables):
+
+```sh
+npx wp-env run --env-cwd="wp-content/plugins/$(basename "$PWD")" tests-cli -- env WCPOS_RECORD_TRANSCRIPTS=1 vendor/bin/phpunit -c phpunit.conformance.xml.dist
 ```
 
 ## References
