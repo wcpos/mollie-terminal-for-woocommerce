@@ -18,6 +18,11 @@ Mollie Terminal requires WooCommerce POS Pro 2.0.0 or newer: the plugin register
 
 The release zip now holds a single `mollie-terminal-for-woocommerce/` folder, so WordPress 7.1.4 and newer installs it into the plugin's own folder instead of a folder with a random suffix.
 
+### Fixed
+
+- **A second charge could start beside an earlier payment that was paid but never recorded on the order.** When the order's earlier Mollie payment was paid but finishing the order failed, or the payment did not match the order, the keypad tile and the POS order-pay page offered a new charge for the full total. Both now refuse it: a paid payment that is being recorded asks the cashier to reload in a few minutes, and one that does not match the order asks them to check it in the Mollie dashboard before charging again.
+- **The stale-payment cleanup now reaches POS open and partially paid orders.** It looked only at pending and failed orders, so a paid payment on a POS order whose completion failed was never finished. The cleanup now finishes it like any other.
+
 ## 0.5.10 - 2026-10-15
 
 ### Fixed

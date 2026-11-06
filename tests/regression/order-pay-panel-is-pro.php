@@ -108,6 +108,19 @@ $GLOBALS['order']->meta = array();
 render( array( 'default_terminal_id' => 'term_1' ) );
 expect( 1 === count( $GLOBALS['panel'] ), 'a plain order renders Pro\'s panel without taking the lock' );
 WCPOS\WooCommercePOS\Payments\Contract\Order_Lock::$refuse = array();
+// An old attempt Mollie reported paid on this unpaid order: its message, no panel, so no second
+// charge. A final unpaid attempt leaves the panel to render.
+$paid_holds = array(
+	'paid' => 'An earlier Mollie payment for this sale was paid and is being recorded. Reload in a few minutes.',
+	WCPOS\WooCommercePOS\MollieTerminal\PaymentAttempt::STATUS_PAID_UNVERIFIED => 'An earlier Mollie payment for this sale was paid but does not match the order. Check it in the Mollie dashboard before charging again.',
+);
+foreach ( $paid_holds + array( 'failed' => '', 'canceled' => '', 'expired' => '' ) as $status => $message ) {
+	$GLOBALS['order']->meta = array( WCPOS\WooCommercePOS\MollieTerminal\PaymentAttempt::META_CURRENT_PAYMENT_ID => 'tr_left', WCPOS\WooCommercePOS\MollieTerminal\PaymentAttempt::META_CURRENT_PAYMENT_STATUS => $status );
+	$html = render( array( 'default_terminal_id' => 'term_1' ) );
+	$expected = '' === $message ? '<p>Pay on the Mollie terminal.</p><div id="wcpos-pro-order-pay"></div>' : '<p>Pay on the Mollie terminal.</p><p class="mtfwc-payment-help">' . $message . '</p>';
+	expect( $expected === $html && ( '' === $message ? 1 : 0 ) === count( $GLOBALS['panel'] ), "a $status old attempt: " . ( '' === $message ? 'Pro\'s panel renders' : 'its message and no panel' ) );
+}
+$GLOBALS['order']->meta = array();
 expect( array() === enqueue( array(), true ), 'nothing is enqueued for Pro\'s panel, even on the order-pay page' );
 
 $GLOBALS['wp'] = (object) array( 'query_vars' => array() );

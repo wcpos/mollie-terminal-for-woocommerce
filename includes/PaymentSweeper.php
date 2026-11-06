@@ -72,8 +72,9 @@ class PaymentSweeper {
 		if ( ! function_exists( 'wc_get_orders' ) ) { return; }
 		$limit = max( 1, (int) apply_filters( 'mtfwc_stale_payment_batch', 25 ) );
 		$page = max( self::MIN_SCAN_PAGE, $limit );
-		// Orders whose current attempt may have gone stale in the browser.
-		$current = $this->find_orders( array( 'pending', 'failed' ), PaymentAttempt::META_CURRENT_PAYMENT_ID, $page );
+		// Orders whose current attempt may have gone stale in the browser, or was paid while its
+		// completion died: every payable status, POS open and partially paid orders included.
+		$current = $this->find_orders( Legacy_Adoption::UNPAID_STATUSES, PaymentAttempt::META_CURRENT_PAYMENT_ID, $page );
 		// Orders holding a payment that was abandoned locally while still open at
 		// Mollie. Their current-attempt pointer is gone, so the query above cannot
 		// see them, and their status is irrelevant: the order may since have been
