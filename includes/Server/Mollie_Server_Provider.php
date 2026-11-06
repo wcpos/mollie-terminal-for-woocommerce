@@ -3,7 +3,9 @@ namespace WCPOS\WooCommercePOS\MollieTerminal\Server;
 
 use InvalidArgumentException;
 use RuntimeException;
+use WCPOS\WooCommercePOS\MollieTerminal\Legacy_Adoption;
 use WCPOS\WooCommercePOS\MollieTerminal\Logger;
+use WCPOS\WooCommercePOS\MollieTerminal\PaymentAttempt;
 use WCPOS\WooCommercePOS\MollieTerminal\RefundReconciler;
 use WCPOS\WooCommercePOS\MollieTerminal\Settings;
 use WCPOS\WooCommercePOS\MollieTerminal\Services\MollieApiClient;
@@ -60,6 +62,12 @@ class Mollie_Server_Provider extends \WCPOS\WooCommercePOSPro\Payments\Server\Ab
 			}
 			$order = wc_get_order( (int) $row['order_id'] );
 			if ( ! $order ) { return new \WP_Error( 'wcpos_order_not_found', __( 'Order not found.', 'mollie-terminal-for-woocommerce' ), array( 'status' => 404 ) ); }
+			// No tile payment beside the old panel's open attempt: a double charge. A replay meets one only if
+			// it predates this fix: the old panel now refuses a start beside a live row, under this same order lock.
+			$current = PaymentAttempt::current( $order );
+			if ( $current && ! PaymentAttempt::is_final( (string) $current['status'] ) && ! Legacy_Adoption::owned_by_pro( $order, (string) $current['payment_id'] ) ) {
+				return new \WP_Error( 'mtfwc_legacy_attempt_open', __( 'An earlier payment for this sale is still open on the payment page. Finish or cancel it there first.', 'mollie-terminal-for-woocommerce' ), array( 'status' => 409 ) );
+			}
 			$payload = array(
 				'amount' => array( 'currency' => $row['currency'], 'value' => $amount ),
 				'description' => sprintf( 'Order #%s', $order->get_order_number() ),

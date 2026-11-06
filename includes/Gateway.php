@@ -354,9 +354,15 @@ class Gateway extends WC_Payment_Gateway {
 			$action_label = $resume
 				? ( 'qr' === $resume_channel ? __( 'Cancel QR payment', 'mollie-terminal-for-woocommerce' ) : __( 'Cancel Terminal Payment', 'mollie-terminal-for-woocommerce' ) )
 				: __( 'Start Terminal Payment', 'mollie-terminal-for-woocommerce' );
-			echo '<div class="mtfwc-payment-actions">';
-			echo '<button type="button" class="button button-primary mtfwc-primary-action" data-mtfwc-mode="' . esc_attr( $action_mode ) . '" data-order-id="' . esc_attr( $order_id ) . '" data-order-token="' . esc_attr( $order_token ) . '">' . esc_html( $action_label ) . '</button>';
-			echo '</div>';
+			if ( ! $resume && $order && ! $order->is_paid() && Legacy_Adoption::has_live_row( $order ) ) {
+				// No Start beside a live ledger row: the start would be refused (AjaxHandler::with_order).
+				// A resuming panel keeps its Cancel, for the attempt it already runs.
+				echo '<p class="mtfwc-till-notice">' . esc_html( Legacy_Adoption::till_message() ) . '</p>';
+			} else {
+				echo '<div class="mtfwc-payment-actions">';
+				echo '<button type="button" class="button button-primary mtfwc-primary-action" data-mtfwc-mode="' . esc_attr( $action_mode ) . '" data-order-id="' . esc_attr( $order_id ) . '" data-order-token="' . esc_attr( $order_token ) . '">' . esc_html( $action_label ) . '</button>';
+				echo '</div>';
+			}
 			if ( $qr_methods ) {
 				echo '<div class="mtfwc-qr-code" hidden>';
 				echo '<img class="mtfwc-qr-image" alt="' . esc_attr__( 'Payment QR code', 'mollie-terminal-for-woocommerce' ) . '">';

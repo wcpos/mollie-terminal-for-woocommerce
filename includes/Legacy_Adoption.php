@@ -196,8 +196,30 @@ final class Legacy_Adoption {
 		);
 	}
 
-	/** Run under Free's per-order lock, the one every ledger write takes. */
-	private static function with_order_lock( int $order_id, callable $callback ) {
+	/**
+	 * Whether Free's ledger holds a live row (pending, authorized or captured) of any method: Pro's
+	 * leg, a till tender or a completed sale. The old panel charges the order total, so a start beside
+	 * such a row is a double charge or an overcharge; the cashier finishes the sale at the till.
+	 */
+	public static function has_live_row( $order ): bool {
+		if ( ! class_exists( '\WCPOS\WooCommercePOS\Payments\Contract\Ledger' ) ) {
+			return false;
+		}
+		foreach ( \WCPOS\WooCommercePOS\Payments\Contract\Ledger::instance()->read( $order ) as $row ) {
+			if ( in_array( $row['status'] ?? '', \WCPOS\WooCommercePOS\Payments\Contract\Ledger::LIVE_STATUSES, true ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** The old panel's refusal beside a live ledger row, in Free's words. */
+	public static function till_message(): string {
+		return __( 'This sale has a payment recorded at the till. Finish it at the till.', 'mollie-terminal-for-woocommerce' );
+	}
+
+	/** Run under Free's per-order lock, the one every ledger write takes (Pro creates its Mollie payment under it). */
+	public static function with_order_lock( int $order_id, callable $callback ) {
 		if ( ! class_exists( '\WCPOS\WooCommercePOS\Payments\Contract\Order_Lock' ) ) {
 			return new \WP_Error( 'mtfwc_adoption_no_lock', 'The POS order lock is unavailable.' );
 		}
