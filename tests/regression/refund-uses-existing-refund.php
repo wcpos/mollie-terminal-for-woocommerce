@@ -60,7 +60,7 @@ class FakeRefundClient extends MollieApiClient {
 	public function __construct() {}
 	public function get_payment( string $payment_id, array $include = array() ): array { $this->calls++; return array( 'amount' => array( 'value' => '30.00', 'currency' => 'EUR' ) ); }
 	public function list_refunds( string $payment_id ): array { $this->calls++; return array(); }
-	public function create_refund( string $payment_id, array $payload ): array { $this->calls++; $this->payload = $payload; return array( 'id' => 're_new', 'status' => 'queued' ); }
+	public function create_refund( string $payment_id, array $payload, string $idempotency_key = '' ): array { $this->calls++; $this->payload = $payload; return array( 'id' => 're_new', 'status' => 'queued' ); }
 }
 
 // Newest first, as returned by WooCommerce; decimal representations may differ.
@@ -71,7 +71,7 @@ $newer = new FakeRefund( 11, '10.000' );
 $order = new FakeOrderForRefund( array( $newer, $older ) );
 $client = new FakeRefundClient();
 $result = ( new RefundHandler( $client ) )->process_refund( $order, 10, 'Returned item' );
-expect( array( 'status' => 'refunded', 'refund_id' => 're_new' ) === $result, 'the existing refund should be reconciled' );
+expect( array( 'status' => 'refunded', 'refund_id' => 're_new', 'mollie_status' => 'queued' ) === $result, 'the existing refund should be reconciled' );
 expect( 're_new' === $newer->get_meta( RefundReconciler::META_MOLLIE_REFUND_ID ) && $newer->saved, 'the newer refund must store the Mollie refund id' );
 expect( $original_older == $older, 'the older refund must remain untouched' );
 expect( 3 === $client->calls && '11' === $client->payload['metadata']['woo_refund_id'], 'Mollie must receive the newer WooCommerce refund id' );

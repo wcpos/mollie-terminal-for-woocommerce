@@ -20,6 +20,7 @@ require_once __DIR__ . '/../../includes/PaymentAttempt.php';
 require_once __DIR__ . '/../../includes/PaymentReconciler.php';
 require_once __DIR__ . '/../../includes/Services/MollieApiClient.php';
 require_once __DIR__ . '/../../includes/Services/TerminalService.php';
+require_once __DIR__ . '/../../includes/Legacy_Adoption.php';
 require_once __DIR__ . '/../../includes/Services/MolliePaymentService.php';
 
 use WCPOS\WooCommercePOS\MollieTerminal\Settings;

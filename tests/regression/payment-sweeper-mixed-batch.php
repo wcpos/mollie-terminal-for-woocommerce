@@ -25,6 +25,7 @@ require_once __DIR__ . '/../../includes/PaymentLock.php';
 require_once __DIR__ . '/../../includes/PaymentReconciler.php';
 require_once __DIR__ . '/../../includes/Services/MollieApiClient.php';
 require_once __DIR__ . '/../../includes/Services/TerminalService.php';
+require_once __DIR__ . '/../../includes/Legacy_Adoption.php';
 require_once __DIR__ . '/../../includes/Services/MolliePaymentService.php';
 require_once __DIR__ . '/../../includes/PaymentSweeper.php';
 

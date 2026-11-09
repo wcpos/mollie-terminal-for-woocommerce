@@ -24,6 +24,12 @@ class PaymentReconciler {
 			// The claim serializes completion across webhook, poll and sweep.
 			// Reload: this request may hold a copy from before another completed it (#21).
 			$fresh = self::reload_order( $order );
+			// Adoption takes this same claim: a payment WooCommerce POS adopted while this request
+			// was asking Mollie is the POS's leg now, and this path completes nothing for it.
+			if ( class_exists( Legacy_Adoption::class ) && Legacy_Adoption::owned_by_pro( $fresh, PaymentAttempt::payment_id( $payment ) ) ) {
+				Logger::log( 'Mollie Terminal payment adopted by WooCommerce POS meanwhile; left to the POS.', array( 'order_id' => $order_id, 'payment_id' => PaymentAttempt::payment_id( $payment ), 'source' => $source ), 'info' );
+				return array( 'status' => 'pending', 'completing' => true, 'retry_allowed' => false );
+			}
 			return $this->apply_payment( $fresh, $payment, $source );
 		} finally {
 			PaymentLock::release( $order_id, 'complete_payment' );

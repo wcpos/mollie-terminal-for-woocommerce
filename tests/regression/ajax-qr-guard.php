@@ -15,6 +15,8 @@ function wp_salt( $scheme = '' ) { return 'test-salt'; }
 function wp_doing_ajax() { return false; }
 function wp_json_encode( $value ) { return json_encode( $value ); }
 function apply_filters( $tag, $value ) { return $value; }
+// The gateway switch lives under POS → Settings → Checkout (see ajax-gateway-disabled.php).
+function wcpos_get_settings( $id, $key = null ) { return array( 'gateways' => array( 'mollie_terminal_for_woocommerce' => array( 'enabled' => true ) ) ); }
 
 class SilentWooLoggerForQrGuard { public function log( $level, $message, $context = array() ) {} }
 function wc_get_logger() { return new SilentWooLoggerForQrGuard(); }
@@ -32,6 +34,7 @@ function wp_send_json_success( $data = null, $status_code = null ) { throw new J
 
 require_once __DIR__ . '/../../includes/Logger.php';
 require_once __DIR__ . '/../../includes/Settings.php';
+require_once __DIR__ . '/../../includes/Legacy_Adoption.php';
 require_once __DIR__ . '/../../includes/AjaxHandler.php';
 
 use WCPOS\WooCommercePOS\MollieTerminal\AjaxHandler;
@@ -40,7 +43,7 @@ function start_qr( array $settings, string $method ): JsonResponseForQrGuard {
 	global $options;
 	// The gateway switch is checked first (see ajax-gateway-disabled.php); this
 	// script is about the QR method guard behind it.
-	$options = array( 'woocommerce_mollie_terminal_for_woocommerce_settings' => array_merge( array( 'enabled' => 'yes' ), $settings ) );
+	$options = array( 'woocommerce_mollie_terminal_for_woocommerce_settings' => $settings );
 	$_POST   = array( 'order_id' => '123', 'order_token' => AjaxHandler::order_token( 123 ), 'channel' => 'qr', 'qr_method' => $method );
 	try {
 		( new AjaxHandler() )->mtfwc_start_payment();
@@ -51,9 +54,9 @@ function start_qr( array $settings, string $method ): JsonResponseForQrGuard {
 	exit( 1 );
 }
 
+// With no QR method enabled the page is Pro's panel: an old-panel start is refused outright.
 $disabled = start_qr( array(), 'ideal' );
-expect( 400 === $disabled->status, 'QR start must be rejected when no QR method is enabled' );
-expect( 'QR code payments are not enabled for this method.' === $disabled->data, 'the rejection should say QR is not enabled' );
+expect( 409 === $disabled->status, 'with no QR method enabled the old panel may not start anything' );
 
 $other = start_qr( array( 'qr_methods' => array( 'bancontact' ) ), 'ideal' );
 expect( 400 === $other->status, 'QR start must be rejected for a method the merchant did not enable' );
