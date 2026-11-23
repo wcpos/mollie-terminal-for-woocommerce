@@ -132,6 +132,7 @@ class PaymentReconciler {
 		if ( $current && $current['payment_id'] !== $payment_id && $metadata_order_id !== (int) $order->get_id() ) { $errors[] = 'payment ID does not match this order'; }
 		if ( isset( $payment['amount']['value'] ) && ! Money::equals( (string) $payment['amount']['value'], (string) $order->get_total(), (string) $order->get_currency() ) ) { $errors[] = 'amount mismatch'; }
 		if ( isset( $payment['amount']['currency'] ) && strtoupper( (string) $payment['amount']['currency'] ) !== strtoupper( (string) $order->get_currency() ) ) { $errors[] = 'currency mismatch'; }
+		if ( 'paid' === ( $payment['status'] ?? '' ) && ! isset( $payment['amount']['value'], $payment['amount']['currency'] ) ) { $errors[] = 'paid payment carries no amount'; }
 		$method   = (string) ( $payment['method'] ?? '' );
 		$recorded = self::recorded_method( $order, $payment_id );
 		if ( null === $recorded ) {
