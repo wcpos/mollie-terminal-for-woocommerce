@@ -95,4 +95,35 @@ $unknown = reconcile_history( array( array( 'payment_id' => 'tr_other', 'status'
 expect( 'verification_failed' === ( $unknown['status'] ?? '' ), 'a payment ID this order never created must be rejected even with matching metadata' );
 expect( in_array( 'payment is not known for this order', $unknown['errors'] ?? array(), true ), 'an unknown payment should be identified as such' );
 
+function reconcile_payload( array $overrides, array $unset = array() ): array {
+	$order = new FakeOrderForMethodVerification( 'pointofsale' );
+	$payment = array_merge( array(
+		'id' => 'tr_method',
+		'status' => 'paid',
+		'method' => 'pointofsale',
+		'mode' => 'live',
+		'amount' => array( 'value' => '12.34', 'currency' => 'EUR' ),
+		'metadata' => array( 'order_id' => '321' ),
+	), $overrides );
+	foreach ( $unset as $key ) { unset( $payment[ $key ] ); }
+	$result = ( new PaymentReconciler( new Settings( array( 'mode' => 'live', 'qr_methods' => array() ) ) ) )->reconcile( $order, $payment, 'test' );
+	$result['order_paid'] = $order->is_paid();
+	return $result;
+}
+
+$paid = reconcile_payload( array() );
+expect( 'paid' === $paid['status'], 'a paid payment with matching amount and currency should pass' );
+expect( true === $paid['order_paid'], 'a paid payment with matching amount and currency should complete the order' );
+$missing_amount = reconcile_payload( array(), array( 'amount' ) );
+expect( 'verification_failed' === $missing_amount['status'], 'a paid payment without an amount should fail verification' );
+expect( in_array( 'paid payment carries no amount', $missing_amount['errors'] ?? array(), true ), 'a paid payment without an amount should identify the missing amount' );
+expect( false === $missing_amount['order_paid'], 'a paid payment without an amount should leave the order unpaid' );
+$missing_currency = reconcile_payload( array( 'amount' => array( 'value' => '12.34' ) ) );
+expect( 'verification_failed' === $missing_currency['status'], 'a paid payment without a currency should fail verification' );
+expect( false === $missing_currency['order_paid'], 'a paid payment without a currency should leave the order unpaid' );
+$missing_value = reconcile_payload( array( 'amount' => array( 'currency' => 'EUR' ) ) );
+expect( 'verification_failed' === $missing_value['status'], 'a paid payment without an amount value should fail verification' );
+expect( false === $missing_value['order_paid'], 'a paid payment without an amount value should leave the order unpaid' );
+expect( 'open' === reconcile_payload( array( 'status' => 'open' ), array( 'amount' ) )['status'], 'an open payment without an amount should remain open' );
+
 echo "payment-reconciler-method ok\n";
